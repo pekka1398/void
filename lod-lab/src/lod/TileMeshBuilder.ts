@@ -118,7 +118,11 @@ export function buildTileMesh(key: TileKey, sampler: SurfaceSampler, options: Ti
       let nx = tuy * tvz - tuz * tvy;
       let ny = tuz * tvx - tux * tvz;
       let nz = tux * tvy - tuy * tvx;
-      const inv = 1 / (Math.hypot(nx, ny, nz) || 1);
+      const normalLength = Math.hypot(nx, ny, nz);
+      if (!Number.isFinite(normalLength) || normalLength < 1e-12) {
+        throw new Error(`Degenerate tile normal at ${tileId(key)} (${i}, ${j})`);
+      }
+      const inv = 1 / normalLength;
       nx *= inv;
       ny *= inv;
       nz *= inv;

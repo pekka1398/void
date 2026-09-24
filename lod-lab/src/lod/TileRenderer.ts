@@ -78,7 +78,7 @@ export class TileRenderer {
     const scale = 1 / this.options.metersPerRenderUnit;
     for (const node of render) {
       const data = node.data;
-      if (!data) continue;
+      if (!data) throw new Error(`TileRenderer.ts sync: render selection has no mesh; id=${node.id}; level=${node.key.level}; camera=${JSON.stringify(cameraPosition)}`);
       wanted.add(node.id);
       let tile = this.tiles.get(node.id);
       if (tile && tile.data !== data) {
@@ -126,7 +126,7 @@ export class TileRenderer {
 
   private disposeTile(id: string): void {
     const tile = this.tiles.get(id);
-    if (!tile) return;
+    if (!tile) throw new Error(`TileRenderer.ts disposeTile: unknown GPU tile id=${id}; resident=${this.tiles.size}`);
     this.group.remove(tile.mesh);
     tile.mesh.geometry.dispose();
     this.tiles.delete(id);

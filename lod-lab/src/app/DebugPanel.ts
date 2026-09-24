@@ -138,7 +138,7 @@ export class DebugPanel {
       `clearance    ${meters(stats.clearanceMeters)}   radius-R ${meters(stats.altitudeMeters)}`,
       `tilt         ${stats.tiltDegrees.toFixed(0)}°`,
       stats.frozen ? '── SELECTION FROZEN ──' : '',
-      `drawn        ${stats.drawn} tiles  (fallback ${selection?.fallbackRendered ?? 0})`,
+      `drawn        ${stats.drawn} tiles`,
       `finest       L${finest}  ≈ ${meters(stats.spacingMeters(finest))}/cell`,
       `levels       ${histogram}`,
       `visited      ${selection?.visited ?? 0}  culled frustum ${selection?.culled.frustum ?? 0} horizon ${selection?.culled.horizon ?? 0}`,

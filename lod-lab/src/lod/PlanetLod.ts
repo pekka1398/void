@@ -60,7 +60,6 @@ export interface LodSelection {
   readonly requests: readonly TileRequest[];
   readonly culled: Readonly<Record<CullReason, number>>;
   /** Nodes drawn at a finer level than wanted because their own data was missing. */
-  readonly fallbackRendered: number;
   readonly visited: number;
   readonly selectMilliseconds: number;
 }
@@ -73,8 +72,7 @@ const PROBE_GRID = [0, 0.5, 1];
  * Invariants:
  *  - A node is only replaced by its children once all four visible children
  *    have data, so refinement never opens a hole.
- *  - A node that should be drawn but has no data (evicted) falls back to its
- *    ready children rather than disappearing.
+ *  - A selected node must have mesh data; missing data is an invariant failure.
  */
 export class PlanetLod {
   readonly roots: readonly LodNode[];
@@ -105,12 +103,13 @@ export class PlanetLod {
     const spacing = this.spacingMeters(node.key.level);
     // Floor: detail smaller than one grid cell cannot be measured by the tile itself.
     const floor = spacing * 0.01;
-    return Math.max(node.data ? node.data.errorMeters : spacing * 0.5, floor);
+    if (!node.data) throw new Error(`PlanetLod.ts geometricErrorMeters: no mesh for id=${node.id}; frame=${this.frame}; level=${node.key.level}`);
+    return Math.max(node.data.errorMeters, floor);
   }
 
   acceptTile(tile: TileMeshData): void {
     const node = this.nodes.get(tile.id);
-    if (!node) return;
+    if (!node) throw new Error(`PlanetLod.ts acceptTile: unknown tile id=${tile.id}; key=${JSON.stringify(tile.key)}; frame=${this.frame}; nodes=${this.nodes.size}`);
     if (!node.data) this.readyCount++;
     node.data = tile;
     node.minHeight = tile.minHeightMeters;
@@ -133,7 +132,6 @@ export class PlanetLod {
     const render: LodNode[] = [];
     const requests = new Map<string, TileRequest>();
     const culled: Record<CullReason, number> = { frustum: 0, horizon: 0 };
-    let fallbackRendered = 0;
     let visited = 0;
     const pixelsPerMeterAtUnitDistance = view.viewportHeightPixels / (2 * Math.tan(view.fovYRadians / 2));
 
@@ -155,23 +153,6 @@ export class PlanetLod {
       return this.geometricErrorMeters(node) * pixelsPerMeterAtUnitDistance / distance;
     };
 
-    // Draw a node that has no data by drawing whatever ready descendants cover it.
-    const renderFallback = (node: LodNode): boolean => {
-      if (node.data) {
-        render.push(node);
-        node.lastUsedFrame = this.frame;
-        return true;
-      }
-      const children = node.children;
-      if (!children || !children.every((child) => child.data)) return false;
-      for (const child of children) {
-        child.lastUsedFrame = this.frame;
-        render.push(child);
-        fallbackRendered++;
-      }
-      return true;
-    };
-
     const visit = (node: LodNode) => {
       visited++;
       node.lastUsedFrame = this.frame;
@@ -180,11 +161,13 @@ export class PlanetLod {
         culled[reason]++;
         return;
       }
+      if (!node.data) throw new Error(`PlanetLod.ts visit: visible node has no mesh; id=${node.id}; frame=${this.frame}; parent=${node.parent?.id ?? 'root'}`);
       const error = screenError(node);
       node.screenErrorPixels = error;
       const wantsSplit = error > view.maxScreenErrorPixels && node.key.level < this.options.maxLevel;
       if (!wantsSplit) {
-        if (!renderFallback(node)) request(node, error + 1e6 / (node.key.level + 1));
+        if (!node.data) throw new Error(`PlanetLod.ts select: selected tile has no mesh; id=${node.id}; frame=${this.frame}; level=${node.key.level}; errorPixels=${error}; threshold=${view.maxScreenErrorPixels}`);
+        render.push(node);
         return;
       }
       const children = this.ensureChildren(node);
@@ -199,9 +182,11 @@ export class PlanetLod {
       }
       if (ready) {
         for (const child of children) visit(child);
-      } else if (!renderFallback(node)) {
-        // Only a missing root reaches here: nothing coarser exists to draw.
-        request(node, Number.POSITIVE_INFINITY);
+      } else {
+        // Keeping a ready parent visible while its children build is the
+        // defined split transition, not recovery from an invalid state.
+        if (!node.data) throw new Error(`PlanetLod.ts select: split parent has no mesh; id=${node.id}; frame=${this.frame}; readyChildren=${children.filter((child) => !!child.data).length}/4; errorPixels=${error}`);
+        render.push(node);
       }
     };
 
@@ -218,7 +203,6 @@ export class PlanetLod {
       render,
       requests: [...requests.values()],
       culled,
-      fallbackRendered,
       visited,
       selectMilliseconds: performance.now() - started,
     };
@@ -319,7 +303,7 @@ export class PlanetLod {
     if (this.readyCount <= this.maxCachedTiles) return;
     const candidates: LodNode[] = [];
     for (const node of this.nodes.values()) {
-      if (node.data && node.key.level > 1 && this.frame - node.lastUsedFrame > this.retainFrames) {
+      if (node.data && !node.children && node.key.level > 1 && this.frame - node.lastUsedFrame > this.retainFrames) {
         candidates.push(node);
       }
     }

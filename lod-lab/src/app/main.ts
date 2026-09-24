@@ -37,12 +37,32 @@ const camera = new THREE.PerspectiveCamera(60, 1, 0.0001, 30000);
 const renderer = new THREE.WebGPURenderer({
   antialias: true,
   logarithmicDepthBuffer: true,
-  forceWebGL: new URLSearchParams(location.search).has('forceWebGL'),
+  forceWebGL: true,
 });
 renderer.setClearColor(0x05060a);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+if (!Number.isFinite(window.devicePixelRatio) || window.devicePixelRatio <= 0) {
+  throw new Error(`main.ts: invalid devicePixelRatio=${window.devicePixelRatio}`);
+}
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 root.append(renderer.domElement);
-const workers = new TileWorkerPool({ radiusMeters: radius, resolution }, (data) => lod.acceptTile(data));
+let disposed = false;
+function panic(error: unknown): never {
+  disposed = true;
+  const failure = error instanceof Error ? error : new Error(`Non-Error thrown: ${String(error)}`);
+  const message = document.createElement('pre');
+  const chain: string[] = [];
+  let current: unknown = failure;
+  while (current instanceof Error) {
+    chain.push(current.stack ?? `${current.name}: ${current.message}`);
+    current = current.cause;
+  }
+  if (current !== undefined) chain.push(`Non-Error cause: ${String(current)}`);
+  message.textContent = `LOD LAB PANIC\n${chain.join('\nCaused by:\n')}`;
+  message.style.cssText = 'position:fixed;inset:12px;z-index:9999;overflow:auto;margin:0;padding:20px;background:#260d14;color:#ffe0e5;white-space:pre-wrap;';
+  root!.append(message);
+  throw failure;
+}
+const workers = new TileWorkerPool({ radiusMeters: radius, resolution }, (data) => lod.acceptTile(data), panic, 4);
 
 let frozen = false;
 let gridErrorPixels = 4;
@@ -102,12 +122,10 @@ window.addEventListener('keydown', (event) => {
   panel.handleKey(event.code);
 });
 
-let disposed = false;
 let previous = performance.now();
 let lastPanelUpdate = 0;
-function renderFrame(now: number): void {
+async function renderFrame(now: number): Promise<void> {
   if (disposed) return;
-  requestAnimationFrame(renderFrame);
   const frameMilliseconds = now - previous;
   previous = now;
   const pose = orbit.pose();
@@ -136,7 +154,7 @@ function renderFrame(now: number): void {
     workers.setWanted(selection.requests);
   }
   tiles.sync(selection.render, pose.position);
-  void renderer.renderAsync(scene, camera);
+  await renderer.renderAsync(scene, camera);
   if (now - lastPanelUpdate > 150) {
     lastPanelUpdate = now;
     panel.update({
@@ -157,14 +175,15 @@ function renderFrame(now: number): void {
       frozen,
     });
   }
+  requestAnimationFrame((time) => { void renderFrame(time).catch(panic); });
 }
 
-void renderer.init().then(() => requestAnimationFrame(renderFrame)).catch((error: unknown) => {
-  const message = document.createElement('pre');
-  message.textContent = `Renderer failed: ${String(error)}`;
-  message.style.color = '#ff9c9c';
-  root.append(message);
-});
+void renderer.init().then(() => {
+  if (!('isWebGLBackend' in renderer.backend) || renderer.backend.isWebGLBackend !== true) {
+    throw new Error(`main.ts: expected explicit WebGL2 backend; actual backend=${renderer.backend.constructor.name}`);
+  }
+  requestAnimationFrame((time) => { void renderFrame(time).catch(panic); });
+}).catch(panic);
 
 if (import.meta.hot) import.meta.hot.dispose(() => {
   disposed = true;

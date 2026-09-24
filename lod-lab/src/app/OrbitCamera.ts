@@ -32,7 +32,7 @@ export class OrbitCamera {
 
   constructor(private readonly options: OrbitCameraOptions, start: Vec3, altitudeMeters: number) {
     this.p = normalize(start);
-    this.north = normalize(reject({ x: 0, y: 1, z: 0 }, this.p, { x: 0, y: 0, z: -1 }));
+    this.north = normalize(reject({ x: 0, y: 1, z: 0 }, this.p));
     this.minClearance = options.minClearanceMeters ?? 2;
     this.maxAltitude = options.maxAltitudeMeters ?? options.radiusMeters * 30;
     this.clearance = altitudeMeters;
@@ -52,7 +52,7 @@ export class OrbitCamera {
     let north = sub(scale(this.north, Math.cos(a)), scale(this.p, Math.sin(a)));
     const p2 = add(scale(p, Math.cos(b)), scale(east, Math.sin(b)));
     p = normalize(p2);
-    north = normalize(reject(north, p, this.north));
+    north = normalize(reject(north, p));
     this.p = p;
     this.north = north;
   }
@@ -100,12 +100,13 @@ function cross(a: Vec3, b: Vec3): Vec3 {
   return { x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x };
 }
 function normalize(a: Vec3): Vec3 {
-  const length = Math.hypot(a.x, a.y, a.z) || 1;
+  const length = Math.hypot(a.x, a.y, a.z);
+  if (!Number.isFinite(length) || length < 1e-9) throw new Error('Cannot normalize a zero or invalid vector');
   return scale(a, 1 / length);
 }
-/** Component of `v` perpendicular to unit `n`; `fallback` when `v` is parallel to `n`. */
-function reject(v: Vec3, n: Vec3, fallback: Vec3): Vec3 {
+/** Component of `v` perpendicular to unit `n`; parallel input is invalid. */
+function reject(v: Vec3, n: Vec3): Vec3 {
   const r = sub(v, scale(n, dot(v, n)));
-  if (Math.hypot(r.x, r.y, r.z) > 1e-9) return r;
-  return sub(fallback, scale(n, dot(fallback, n)));
+  if (Math.hypot(r.x, r.y, r.z) < 1e-9) throw new Error('Orbit camera tangent axis is parallel to radial direction');
+  return r;
 }

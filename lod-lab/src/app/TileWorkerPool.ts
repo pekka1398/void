@@ -19,12 +19,20 @@ export class TileWorkerPool {
   constructor(
     options: TileMeshOptions,
     private readonly onTile: (tile: TileMeshData) => void,
-    workerCount = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 4) - 1)),
+    private readonly onFatal: (error: Error) => void,
+    workerCount: number,
   ) {
+    if (!Number.isInteger(workerCount) || workerCount < 1) {
+      throw new Error(`TileWorkerPool.ts: invalid workerCount=${workerCount}`);
+    }
     for (let index = 0; index < workerCount; index++) {
       const worker = new Worker(new URL('./tile.worker.ts', import.meta.url), { type: 'module' });
       worker.onmessage = (event: MessageEvent<TileMeshData>) => this.finish(worker, event.data);
-      worker.onerror = (event) => console.error('tile worker failed', event.message);
+      worker.onerror = (event) => {
+        event.preventDefault();
+        this.onFatal(new Error(`tile.worker.ts failed: ${event.message}; source=${event.filename}:${event.lineno}:${event.colno}; job=${this.busy.get(worker) ?? 'initialization'}; inFlight=${this.inFlight.size}`));
+      };
+      worker.onmessageerror = () => this.onFatal(new Error(`TileWorkerPool.ts: unreadable worker response; job=${this.busy.get(worker) ?? 'initialization'}`));
       const init: TileWorkerRequest = { type: 'init', options };
       worker.postMessage(init);
       this.idle.push(worker);
@@ -72,12 +80,21 @@ export class TileWorkerPool {
 
   private finish(worker: Worker, tile: TileMeshData): void {
     const id = this.busy.get(worker);
+    if (!id || tile.id !== id) {
+      this.onFatal(new Error(`TileWorkerPool.ts: response does not match active job; expected=${id}; received=${tile.id}; key=${JSON.stringify(tile.key)}`));
+      return;
+    }
     this.busy.delete(worker);
-    if (id) this.inFlight.delete(id);
+    this.inFlight.delete(id);
     this.idle.push(worker);
     this.builtCount++;
     this.buildMillisecondsTotal += tile.buildMilliseconds;
-    this.onTile(tile);
+    try {
+      this.onTile(tile);
+    } catch (cause) {
+      this.onFatal(new Error(`TileWorkerPool.ts: onTile failed; id=${id}; key=${JSON.stringify(tile.key)}; buildMilliseconds=${tile.buildMilliseconds}; builtCount=${this.builtCount}`, { cause }));
+      return;
+    }
     this.pump();
   }
 }
