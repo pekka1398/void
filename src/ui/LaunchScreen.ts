@@ -1,5 +1,4 @@
 import type { LaunchPresentation } from './LaunchPresentation';
-import './launch-screen.css';
 
 const DEFAULT_LAUNCH_COVER = '/images/void-explorer-launch-cover-four-wing-v4.png';
 

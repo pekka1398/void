@@ -3,7 +3,6 @@ import type { CockpitRadarContact, CockpitRadarSnapshot } from './CockpitRadar';
 import { projectHolographicRadar } from './HolographicRadar';
 import type { HudSnapshot } from './Hud';
 
-import './cockpit.css';
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const RADAR_PROJECTION = {

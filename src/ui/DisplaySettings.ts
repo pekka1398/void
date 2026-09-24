@@ -1,7 +1,6 @@
 import type { AudioMix } from '../audio/AudioSettings';
 import type { GraphicsQuality, RenderQualityTier } from '../render/GraphicsQuality';
 import type { NeonPhosphorMode } from '../render/post/NeonPhosphor';
-import './display-settings.css';
 
 export interface DisplaySettingsValues {
   graphicsQuality: GraphicsQuality;

@@ -1,5 +1,4 @@
 import { PAUSE_CONTROLS, type PauseControlsMode, type PauseControlsSection } from './PauseControls';
-import './pause-menu.css';
 
 export interface PauseMenuContext {
   readonly systemName: string;

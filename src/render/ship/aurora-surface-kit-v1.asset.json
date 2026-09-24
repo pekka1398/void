@@ -1,0 +1,1383 @@
+{
+  "id": "aurora-surface-kit-v1",
+  "name": "AURORA VX-9 / planetary surface kit",
+  "url": "/models/aurora-surface-kit-v1.glb",
+  "surfaceKitVersion": 1,
+  "physicalMetersPerGltfUnit": 1,
+  "hullAssetId": "aurora-four-wing-v4",
+  "hullSha256": "6876d515bd967d19070956e55b40c320a03bed7163cde9494b13c1f3ae1350d5",
+  "rootNodeName": "AURORA_SURFACE_KIT_ROOT",
+  "collisionRootNodeName": "AURORA_SURFACE_KIT_COLLISION",
+  "physicalBoundsMeters": {
+    "min": {
+      "x": -6.120602130889893,
+      "y": -0.8149999976158142,
+      "z": -6.159999847412109
+    },
+    "max": {
+      "x": 6.120602130889893,
+      "y": 1.995898723602295,
+      "z": 5.85699987411499
+    }
+  },
+  "landingPadsMeters": [
+    {
+      "id": "nose",
+      "nodeName": "SOCKET_PAD_NOSE",
+      "positionMeters": {
+        "x": 0,
+        "y": -2.2,
+        "z": -3.55
+      },
+      "radiusMeters": 0.42
+    },
+    {
+      "id": "port",
+      "nodeName": "SOCKET_PAD_PORT",
+      "positionMeters": {
+        "x": -2.28,
+        "y": -2.2,
+        "z": 2.5
+      },
+      "radiusMeters": 0.42
+    },
+    {
+      "id": "starboard",
+      "nodeName": "SOCKET_PAD_STARBOARD",
+      "positionMeters": {
+        "x": 2.28,
+        "y": -2.2,
+        "z": 2.5
+      },
+      "radiusMeters": 0.42
+    }
+  ],
+  "liftThrusterSocketsMeters": [
+    {
+      "id": "fore-port",
+      "nodeName": "SOCKET_LIFT_FORE_PORT",
+      "positionMeters": {
+        "x": -0.96,
+        "y": -0.785,
+        "z": -1.45
+      },
+      "direction": {
+        "x": 0,
+        "y": -1,
+        "z": 0
+      },
+      "radiusMeters": 0.25
+    },
+    {
+      "id": "fore-starboard",
+      "nodeName": "SOCKET_LIFT_FORE_STARBOARD",
+      "positionMeters": {
+        "x": 0.96,
+        "y": -0.785,
+        "z": -1.45
+      },
+      "direction": {
+        "x": 0,
+        "y": -1,
+        "z": 0
+      },
+      "radiusMeters": 0.25
+    },
+    {
+      "id": "aft-port",
+      "nodeName": "SOCKET_LIFT_AFT_PORT",
+      "positionMeters": {
+        "x": -1.04,
+        "y": -0.805,
+        "z": 1.95
+      },
+      "direction": {
+        "x": 0,
+        "y": -1,
+        "z": 0
+      },
+      "radiusMeters": 0.25
+    },
+    {
+      "id": "aft-starboard",
+      "nodeName": "SOCKET_LIFT_AFT_STARBOARD",
+      "positionMeters": {
+        "x": 1.04,
+        "y": -0.805,
+        "z": 1.95
+      },
+      "direction": {
+        "x": 0,
+        "y": -1,
+        "z": 0
+      },
+      "radiusMeters": 0.25
+    }
+  ],
+  "gearTransforms": [
+    {
+      "id": "nose-hinge",
+      "nodeName": "GEAR_NOSE_HINGE",
+      "parentNodeName": "AURORA_SURFACE_KIT_ROOT",
+      "stowed": {
+        "positionMeters": {
+          "x": 0,
+          "y": -0.23,
+          "z": -3.3
+        },
+        "rotationQuaternion": {
+          "x": -0.7071067811865475,
+          "y": 0,
+          "z": 0,
+          "w": 0.7071067811865476
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      },
+      "deployed": {
+        "positionMeters": {
+          "x": 0,
+          "y": -0.23,
+          "z": -3.3
+        },
+        "rotationQuaternion": {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "w": 1
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      }
+    },
+    {
+      "id": "nose-foot",
+      "nodeName": "GEAR_NOSE_FOOT",
+      "parentNodeName": "GEAR_NOSE_HINGE",
+      "stowed": {
+        "positionMeters": {
+          "x": 0,
+          "y": -1.795,
+          "z": -0.25
+        },
+        "rotationQuaternion": {
+          "x": 0.7071067811865475,
+          "y": 0,
+          "z": 0,
+          "w": 0.7071067811865476
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      },
+      "deployed": {
+        "positionMeters": {
+          "x": 0,
+          "y": -1.795,
+          "z": -0.25
+        },
+        "rotationQuaternion": {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "w": 1
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      }
+    },
+    {
+      "id": "port-hinge",
+      "nodeName": "GEAR_PORT_HINGE",
+      "parentNodeName": "AURORA_SURFACE_KIT_ROOT",
+      "stowed": {
+        "positionMeters": {
+          "x": -1.62,
+          "y": -0.4,
+          "z": 2.45
+        },
+        "rotationQuaternion": {
+          "x": -0.7071067811865475,
+          "y": 0,
+          "z": 0,
+          "w": 0.7071067811865476
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      },
+      "deployed": {
+        "positionMeters": {
+          "x": -1.62,
+          "y": -0.4,
+          "z": 2.45
+        },
+        "rotationQuaternion": {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "w": 1
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      }
+    },
+    {
+      "id": "port-foot",
+      "nodeName": "GEAR_PORT_FOOT",
+      "parentNodeName": "GEAR_PORT_HINGE",
+      "stowed": {
+        "positionMeters": {
+          "x": -0.6599999999999997,
+          "y": -1.625,
+          "z": 0.04999999999999982
+        },
+        "rotationQuaternion": {
+          "x": 0.7071067811865475,
+          "y": 0,
+          "z": 0,
+          "w": 0.7071067811865476
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      },
+      "deployed": {
+        "positionMeters": {
+          "x": -0.6599999999999997,
+          "y": -1.625,
+          "z": 0.04999999999999982
+        },
+        "rotationQuaternion": {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "w": 1
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      }
+    },
+    {
+      "id": "starboard-hinge",
+      "nodeName": "GEAR_STARBOARD_HINGE",
+      "parentNodeName": "AURORA_SURFACE_KIT_ROOT",
+      "stowed": {
+        "positionMeters": {
+          "x": 1.62,
+          "y": -0.4,
+          "z": 2.45
+        },
+        "rotationQuaternion": {
+          "x": -0.7071067811865475,
+          "y": 0,
+          "z": 0,
+          "w": 0.7071067811865476
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      },
+      "deployed": {
+        "positionMeters": {
+          "x": 1.62,
+          "y": -0.4,
+          "z": 2.45
+        },
+        "rotationQuaternion": {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "w": 1
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      }
+    },
+    {
+      "id": "starboard-foot",
+      "nodeName": "GEAR_STARBOARD_FOOT",
+      "parentNodeName": "GEAR_STARBOARD_HINGE",
+      "stowed": {
+        "positionMeters": {
+          "x": 0.6599999999999997,
+          "y": -1.625,
+          "z": 0.04999999999999982
+        },
+        "rotationQuaternion": {
+          "x": 0.7071067811865475,
+          "y": 0,
+          "z": 0,
+          "w": 0.7071067811865476
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      },
+      "deployed": {
+        "positionMeters": {
+          "x": 0.6599999999999997,
+          "y": -1.625,
+          "z": 0.04999999999999982
+        },
+        "rotationQuaternion": {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "w": 1
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      }
+    }
+  ],
+  "rampTransforms": [
+    {
+      "id": "aft-ramp",
+      "nodeName": "RAMP_AFT_HINGE",
+      "parentNodeName": "AURORA_SURFACE_KIT_ROOT",
+      "stowed": {
+        "positionMeters": {
+          "x": 0,
+          "y": -0.53,
+          "z": 3.95
+        },
+        "rotationQuaternion": {
+          "x": 0.9719688163101704,
+          "y": 0,
+          "z": 0,
+          "w": 0.23510980439064266
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      },
+      "deployed": {
+        "positionMeters": {
+          "x": 0,
+          "y": -0.53,
+          "z": 3.95
+        },
+        "rotationQuaternion": {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "w": 1
+        },
+        "scale": {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      }
+    }
+  ],
+  "pilotEyeMeters": {
+    "x": 0,
+    "y": 0.7489141225814819,
+    "z": -2.965000033378601
+  },
+  "egressRailMeters": [
+    {
+      "positionMeters": {
+        "x": 0,
+        "y": 0.7489141225814819,
+        "z": -2.965000033378601
+      },
+      "stage": "interior-fade"
+    },
+    {
+      "positionMeters": {
+        "x": 0,
+        "y": 0.2,
+        "z": 3.8
+      },
+      "stage": "interior-fade"
+    },
+    {
+      "positionMeters": {
+        "x": 0,
+        "y": 0.13746153846153852,
+        "z": 6.3
+      },
+      "stage": "exterior"
+    },
+    {
+      "positionMeters": {
+        "x": 0,
+        "y": -0.3250000000000002,
+        "z": 7.2
+      },
+      "stage": "exterior"
+    },
+    {
+      "positionMeters": {
+        "x": 0,
+        "y": -0.5000000000000002,
+        "z": 7.7
+      },
+      "stage": "exterior"
+    }
+  ],
+  "rampFootMeters": {
+    "x": 0,
+    "y": -2.2,
+    "z": 7.2
+  },
+  "rampFootNodeName": "SOCKET_RAMP_FOOT",
+  "egressStandMeters": {
+    "x": 0,
+    "y": -2.2,
+    "z": 7.7
+  },
+  "egressStandNodeName": "SOCKET_EGRESS_STAND",
+  "rampSurfaceMeters": {
+    "startMeters": {
+      "x": 0,
+      "y": -0.42500000000000004,
+      "z": 3.95
+    },
+    "endMeters": {
+      "x": 0,
+      "y": -2.095,
+      "z": 7.2
+    },
+    "widthMeters": 1.18,
+    "thicknessMeters": 0.0933919097746727
+  },
+  "boardingVolumeMeters": {
+    "centerMeters": {
+      "x": 0,
+      "y": -1.2,
+      "z": 7.35
+    },
+    "halfExtentsMeters": {
+      "x": 1.35,
+      "y": 1.25,
+      "z": 1.35
+    }
+  },
+  "collisionProxyMeters": [
+    {
+      "id": "pressure-00",
+      "nodeName": "COLLISION_PRESSURE_00",
+      "kind": "pressure-body",
+      "centerMeters": {
+        "x": 0,
+        "y": 0.020000000000000004,
+        "z": -5.93
+      },
+      "halfExtentsMeters": {
+        "x": 0.19999999999999998,
+        "y": 0.16499999999999998,
+        "z": 0.245
+      }
+    },
+    {
+      "id": "pressure-01",
+      "nodeName": "COLLISION_PRESSURE_01",
+      "kind": "pressure-body",
+      "centerMeters": {
+        "x": 0,
+        "y": 0.029999999999999985,
+        "z": -5.375
+      },
+      "halfExtentsMeters": {
+        "x": 0.385,
+        "y": 0.255,
+        "z": 0.3400000000000002
+      }
+    },
+    {
+      "id": "pressure-02",
+      "nodeName": "COLLISION_PRESSURE_02",
+      "kind": "pressure-body",
+      "centerMeters": {
+        "x": 0,
+        "y": 0.04999999999999999,
+        "z": -4.675
+      },
+      "halfExtentsMeters": {
+        "x": 0.585,
+        "y": 0.365,
+        "z": 0.39
+      }
+    },
+    {
+      "id": "pressure-03",
+      "nodeName": "COLLISION_PRESSURE_03",
+      "kind": "pressure-body",
+      "centerMeters": {
+        "x": 0,
+        "y": 0.09000000000000002,
+        "z": -3.9
+      },
+      "halfExtentsMeters": {
+        "x": 0.8250000000000001,
+        "y": 0.48500000000000004,
+        "z": 0.4149999999999999
+      }
+    },
+    {
+      "id": "pressure-04",
+      "nodeName": "COLLISION_PRESSURE_04",
+      "kind": "pressure-body",
+      "centerMeters": {
+        "x": 0,
+        "y": 0.12500000000000003,
+        "z": -3.125
+      },
+      "halfExtentsMeters": {
+        "x": 1.145,
+        "y": 0.6000000000000001,
+        "z": 0.39
+      }
+    },
+    {
+      "id": "pressure-05",
+      "nodeName": "COLLISION_PRESSURE_05",
+      "kind": "pressure-body",
+      "centerMeters": {
+        "x": 0,
+        "y": 0.14,
+        "z": -2.425
+      },
+      "halfExtentsMeters": {
+        "x": 1.555,
+        "y": 0.6950000000000001,
+        "z": 0.33999999999999997
+      }
+    },
+    {
+      "id": "pressure-06",
+      "nodeName": "COLLISION_PRESSURE_06",
+      "kind": "pressure-body",
+      "centerMeters": {
+        "x": 0,
+        "y": 0.14500000000000002,
+        "z": -1.7000000000000002
+      },
+      "halfExtentsMeters": {
+        "x": 1.845,
+        "y": 0.75,
+        "z": 0.41500000000000004
+      }
+    },
+    {
+      "id": "pressure-07",
+      "nodeName": "COLLISION_PRESSURE_07",
+      "kind": "pressure-body",
+      "centerMeters": {
+        "x": 0,
+        "y": 0.16000000000000003,
+        "z": -0.875
+      },
+      "halfExtentsMeters": {
+        "x": 1.855,
+        "y": 0.8150000000000001,
+        "z": 0.44000000000000006
+      }
+    },
+    {
+      "id": "pressure-08",
+      "nodeName": "COLLISION_PRESSURE_08",
+      "kind": "pressure-body",
+      "centerMeters": {
+        "x": 0,
+        "y": 0.16499999999999998,
+        "z": 0.07499999999999998
+      },
+      "halfExtentsMeters": {
+        "x": 1.91,
+        "y": 0.8799999999999999,
+        "z": 0.54
+      }
+    },
+    {
+      "id": "pressure-09",
+      "nodeName": "COLLISION_PRESSURE_09",
+      "kind": "pressure-body",
+      "centerMeters": {
+        "x": 0,
+        "y": 0.15999999999999998,
+        "z": 1.15
+      },
+      "halfExtentsMeters": {
+        "x": 1.945,
+        "y": 0.885,
+        "z": 0.5650000000000001
+      }
+    },
+    {
+      "id": "pressure-10",
+      "nodeName": "COLLISION_PRESSURE_10",
+      "kind": "pressure-body",
+      "centerMeters": {
+        "x": 0,
+        "y": 0.14499999999999996,
+        "z": 2.225
+      },
+      "halfExtentsMeters": {
+        "x": 1.945,
+        "y": 0.8699999999999999,
+        "z": 0.54
+      }
+    },
+    {
+      "id": "pressure-11",
+      "nodeName": "COLLISION_PRESSURE_11",
+      "kind": "pressure-body",
+      "centerMeters": {
+        "x": 0,
+        "y": 0.11499999999999999,
+        "z": 3.2350000000000003
+      },
+      "halfExtentsMeters": {
+        "x": 1.925,
+        "y": 0.8,
+        "z": 0.5000000000000001
+      }
+    },
+    {
+      "id": "pressure-12",
+      "nodeName": "COLLISION_PRESSURE_12",
+      "kind": "pressure-body",
+      "centerMeters": {
+        "x": 0,
+        "y": 0.07500000000000001,
+        "z": 4.085
+      },
+      "halfExtentsMeters": {
+        "x": 1.855,
+        "y": 0.6799999999999999,
+        "z": 0.38
+      }
+    },
+    {
+      "id": "pressure-13",
+      "nodeName": "COLLISION_PRESSURE_13",
+      "kind": "pressure-body",
+      "centerMeters": {
+        "x": 0,
+        "y": -0.015000000000000013,
+        "z": 4.6850000000000005
+      },
+      "halfExtentsMeters": {
+        "x": 1.625,
+        "y": 0.49,
+        "z": 0.2499999999999999
+      }
+    },
+    {
+      "id": "canopy",
+      "nodeName": "COLLISION_CANOPY",
+      "kind": "canopy",
+      "centerMeters": {
+        "x": 0,
+        "y": 0.7489141225814819,
+        "z": -2.965000033378601
+      },
+      "halfExtentsMeters": {
+        "x": 0.7799999713897705,
+        "y": 0.49558591842651367,
+        "z": 1.6850000619888306
+      }
+    },
+    {
+      "id": "engine-port",
+      "nodeName": "COLLISION_ENGINE_PORT",
+      "kind": "engine",
+      "centerMeters": {
+        "x": -2.04,
+        "y": -0.055,
+        "z": 4.05
+      },
+      "halfExtentsMeters": {
+        "x": 0.785,
+        "y": 0.76,
+        "z": 1.6
+      }
+    },
+    {
+      "id": "fin-port",
+      "nodeName": "COLLISION_FIN_PORT",
+      "kind": "fin",
+      "centerMeters": {
+        "x": -1.27,
+        "y": 1.28,
+        "z": 2.89
+      },
+      "halfExtentsMeters": {
+        "x": 0.41,
+        "y": 0.72,
+        "z": 1.13
+      }
+    },
+    {
+      "id": "fore-wing-port-00",
+      "nodeName": "COLLISION_FORE_WING_PORT_00",
+      "kind": "wing",
+      "centerMeters": {
+        "x": -1.1783333333333335,
+        "y": 0.205,
+        "z": -2.11552380532927
+      },
+      "halfExtentsMeters": {
+        "x": 0.3133333333333334,
+        "y": 0.13999999999999999,
+        "z": 0.6294761946707302
+      }
+    },
+    {
+      "id": "fore-wing-port-01",
+      "nodeName": "COLLISION_FORE_WING_PORT_01",
+      "kind": "wing",
+      "centerMeters": {
+        "x": -1.7550000000000001,
+        "y": 0.193125,
+        "z": -1.722707544626725
+      },
+      "halfExtentsMeters": {
+        "x": 0.31333333333333335,
+        "y": 0.15187499999999998,
+        "z": 0.5602533717589248
+      }
+    },
+    {
+      "id": "fore-wing-port-02",
+      "nodeName": "COLLISION_FORE_WING_PORT_02",
+      "kind": "wing",
+      "centerMeters": {
+        "x": -2.331666666666667,
+        "y": 0.16060825892857142,
+        "z": -1.4298379945662956
+      },
+      "halfExtentsMeters": {
+        "x": 0.31333333333333335,
+        "y": 0.15025111607142858,
+        "z": 0.6171924592434884
+      }
+    },
+    {
+      "id": "fore-wing-port-03",
+      "nodeName": "COLLISION_FORE_WING_PORT_03",
+      "kind": "wing",
+      "centerMeters": {
+        "x": -2.908333333333333,
+        "y": 0.12295758928571429,
+        "z": -1.0463351832124876
+      },
+      "halfExtentsMeters": {
+        "x": 0.31333333333333335,
+        "y": 0.14349330357142856,
+        "z": 0.5834982854346732
+      }
+    },
+    {
+      "id": "fore-wing-port-04",
+      "nodeName": "COLLISION_FORE_WING_PORT_04",
+      "kind": "wing",
+      "centerMeters": {
+        "x": -3.4850000000000003,
+        "y": 0.08530691964285714,
+        "z": -0.6628323718586794
+      },
+      "halfExtentsMeters": {
+        "x": 0.3133333333333336,
+        "y": 0.13673549107142857,
+        "z": 0.5498041116258583
+      }
+    },
+    {
+      "id": "fore-wing-port-05",
+      "nodeName": "COLLISION_FORE_WING_PORT_05",
+      "kind": "wing",
+      "centerMeters": {
+        "x": -4.0616666666666665,
+        "y": 0.04765625,
+        "z": -0.2793295605048713
+      },
+      "halfExtentsMeters": {
+        "x": 0.3133333333333329,
+        "y": 0.12997767857142856,
+        "z": 0.5161099378170425
+      }
+    },
+    {
+      "id": "fore-wing-port-06",
+      "nodeName": "COLLISION_FORE_WING_PORT_06",
+      "kind": "wing",
+      "centerMeters": {
+        "x": -4.638333333333334,
+        "y": 0.010005580357142885,
+        "z": 0.10417325084893658
+      },
+      "halfExtentsMeters": {
+        "x": 0.3133333333333336,
+        "y": 0.12321986607142857,
+        "z": 0.48241576400822794
+      }
+    },
+    {
+      "id": "fore-wing-port-07",
+      "nodeName": "COLLISION_FORE_WING_PORT_07",
+      "kind": "wing",
+      "centerMeters": {
+        "x": -5.215,
+        "y": -0.02764508928571427,
+        "z": 0.48767606220274473
+      },
+      "halfExtentsMeters": {
+        "x": 0.31333333333333313,
+        "y": 0.11646205357142855,
+        "z": 0.4487215901994125
+      }
+    },
+    {
+      "id": "fore-wing-port-08",
+      "nodeName": "COLLISION_FORE_WING_PORT_08",
+      "kind": "wing",
+      "centerMeters": {
+        "x": -5.791666666666666,
+        "y": -0.0652957589285714,
+        "z": 0.7862545365299973
+      },
+      "halfExtentsMeters": {
+        "x": 0.3133333333333336,
+        "y": 0.1097042410714286,
+        "z": 0.3301030793640424
+      }
+    },
+    {
+      "id": "aft-wing-port-00",
+      "nodeName": "COLLISION_AFT_WING_PORT_00",
+      "kind": "wing",
+      "centerMeters": {
+        "x": -2.05,
+        "y": -0.21657142857142858,
+        "z": 1.9695419426048564
+      },
+      "halfExtentsMeters": {
+        "x": 0.33499999999999996,
+        "y": 0.14657142857142857,
+        "z": 1.4978752759381897
+      }
+    },
+    {
+      "id": "aft-wing-port-01",
+      "nodeName": "COLLISION_AFT_WING_PORT_01",
+      "kind": "wing",
+      "centerMeters": {
+        "x": -2.67,
+        "y": -0.23096428571428573,
+        "z": 2.09256320839182
+      },
+      "halfExtentsMeters": {
+        "x": 0.3350000000000001,
+        "y": 0.1388214285714286,
+        "z": 1.5917424572400782
+      }
+    },
+    {
+      "id": "aft-wing-port-02",
+      "nodeName": "COLLISION_AFT_WING_PORT_02",
+      "kind": "wing",
+      "centerMeters": {
+        "x": -3.29,
+        "y": -0.24535714285714286,
+        "z": 2.316356178812446
+      },
+      "halfExtentsMeters": {
+        "x": 0.33499999999999985,
+        "y": 0.1310714285714286,
+        "z": 1.4868888543001368
+      }
+    },
+    {
+      "id": "aft-wing-port-03",
+      "nodeName": "COLLISION_AFT_WING_PORT_03",
+      "kind": "wing",
+      "centerMeters": {
+        "x": -3.9099999999999997,
+        "y": -0.25975000000000004,
+        "z": 2.429528211504647
+      },
+      "halfExtentsMeters": {
+        "x": 0.3350000000000001,
+        "y": 0.12332142857142861,
+        "z": 1.271414843706034
+      }
+    },
+    {
+      "id": "aft-wing-port-04",
+      "nodeName": "COLLISION_AFT_WING_PORT_04",
+      "kind": "wing",
+      "centerMeters": {
+        "x": -4.529999999999999,
+        "y": -0.27414285714285713,
+        "z": 2.480588733551049
+      },
+      "halfExtentsMeters": {
+        "x": 0.3350000000000001,
+        "y": 0.11557142857142857,
+        "z": 0.993829322466132
+      }
+    },
+    {
+      "id": "aft-wing-port-05",
+      "nodeName": "COLLISION_AFT_WING_PORT_05",
+      "kind": "wing",
+      "centerMeters": {
+        "x": -5.15,
+        "y": -0.28853571428571434,
+        "z": 2.5316492555974506
+      },
+      "halfExtentsMeters": {
+        "x": 0.3350000000000001,
+        "y": 0.1078214285714286,
+        "z": 0.7162438012262301
+      }
+    },
+    {
+      "id": "aft-wing-port-06",
+      "nodeName": "COLLISION_AFT_WING_PORT_06",
+      "kind": "wing",
+      "centerMeters": {
+        "x": -5.77,
+        "y": -0.30292857142857144,
+        "z": 2.582709777643853
+      },
+      "halfExtentsMeters": {
+        "x": 0.3350000000000001,
+        "y": 0.10007142857142859,
+        "z": 0.438658279986328
+      }
+    },
+    {
+      "id": "engine-starboard",
+      "nodeName": "COLLISION_ENGINE_STARBOARD",
+      "kind": "engine",
+      "centerMeters": {
+        "x": 2.04,
+        "y": -0.055,
+        "z": 4.05
+      },
+      "halfExtentsMeters": {
+        "x": 0.785,
+        "y": 0.76,
+        "z": 1.6
+      }
+    },
+    {
+      "id": "fin-starboard",
+      "nodeName": "COLLISION_FIN_STARBOARD",
+      "kind": "fin",
+      "centerMeters": {
+        "x": 1.27,
+        "y": 1.28,
+        "z": 2.89
+      },
+      "halfExtentsMeters": {
+        "x": 0.41,
+        "y": 0.72,
+        "z": 1.13
+      }
+    },
+    {
+      "id": "fore-wing-starboard-00",
+      "nodeName": "COLLISION_FORE_WING_STARBOARD_00",
+      "kind": "wing",
+      "centerMeters": {
+        "x": 1.1783333333333335,
+        "y": 0.205,
+        "z": -2.11552380532927
+      },
+      "halfExtentsMeters": {
+        "x": 0.3133333333333334,
+        "y": 0.13999999999999999,
+        "z": 0.6294761946707302
+      }
+    },
+    {
+      "id": "fore-wing-starboard-01",
+      "nodeName": "COLLISION_FORE_WING_STARBOARD_01",
+      "kind": "wing",
+      "centerMeters": {
+        "x": 1.7550000000000001,
+        "y": 0.193125,
+        "z": -1.722707544626725
+      },
+      "halfExtentsMeters": {
+        "x": 0.31333333333333335,
+        "y": 0.15187499999999998,
+        "z": 0.5602533717589248
+      }
+    },
+    {
+      "id": "fore-wing-starboard-02",
+      "nodeName": "COLLISION_FORE_WING_STARBOARD_02",
+      "kind": "wing",
+      "centerMeters": {
+        "x": 2.331666666666667,
+        "y": 0.16060825892857142,
+        "z": -1.4298379945662956
+      },
+      "halfExtentsMeters": {
+        "x": 0.31333333333333335,
+        "y": 0.15025111607142858,
+        "z": 0.6171924592434884
+      }
+    },
+    {
+      "id": "fore-wing-starboard-03",
+      "nodeName": "COLLISION_FORE_WING_STARBOARD_03",
+      "kind": "wing",
+      "centerMeters": {
+        "x": 2.908333333333333,
+        "y": 0.12295758928571429,
+        "z": -1.0463351832124876
+      },
+      "halfExtentsMeters": {
+        "x": 0.31333333333333335,
+        "y": 0.14349330357142856,
+        "z": 0.5834982854346732
+      }
+    },
+    {
+      "id": "fore-wing-starboard-04",
+      "nodeName": "COLLISION_FORE_WING_STARBOARD_04",
+      "kind": "wing",
+      "centerMeters": {
+        "x": 3.4850000000000003,
+        "y": 0.08530691964285714,
+        "z": -0.6628323718586794
+      },
+      "halfExtentsMeters": {
+        "x": 0.3133333333333336,
+        "y": 0.13673549107142857,
+        "z": 0.5498041116258583
+      }
+    },
+    {
+      "id": "fore-wing-starboard-05",
+      "nodeName": "COLLISION_FORE_WING_STARBOARD_05",
+      "kind": "wing",
+      "centerMeters": {
+        "x": 4.0616666666666665,
+        "y": 0.04765625,
+        "z": -0.2793295605048713
+      },
+      "halfExtentsMeters": {
+        "x": 0.3133333333333329,
+        "y": 0.12997767857142856,
+        "z": 0.5161099378170425
+      }
+    },
+    {
+      "id": "fore-wing-starboard-06",
+      "nodeName": "COLLISION_FORE_WING_STARBOARD_06",
+      "kind": "wing",
+      "centerMeters": {
+        "x": 4.638333333333334,
+        "y": 0.010005580357142885,
+        "z": 0.10417325084893658
+      },
+      "halfExtentsMeters": {
+        "x": 0.3133333333333336,
+        "y": 0.12321986607142857,
+        "z": 0.48241576400822794
+      }
+    },
+    {
+      "id": "fore-wing-starboard-07",
+      "nodeName": "COLLISION_FORE_WING_STARBOARD_07",
+      "kind": "wing",
+      "centerMeters": {
+        "x": 5.215,
+        "y": -0.02764508928571427,
+        "z": 0.48767606220274473
+      },
+      "halfExtentsMeters": {
+        "x": 0.31333333333333313,
+        "y": 0.11646205357142855,
+        "z": 0.4487215901994125
+      }
+    },
+    {
+      "id": "fore-wing-starboard-08",
+      "nodeName": "COLLISION_FORE_WING_STARBOARD_08",
+      "kind": "wing",
+      "centerMeters": {
+        "x": 5.791666666666666,
+        "y": -0.0652957589285714,
+        "z": 0.7862545365299973
+      },
+      "halfExtentsMeters": {
+        "x": 0.3133333333333336,
+        "y": 0.1097042410714286,
+        "z": 0.3301030793640424
+      }
+    },
+    {
+      "id": "aft-wing-starboard-00",
+      "nodeName": "COLLISION_AFT_WING_STARBOARD_00",
+      "kind": "wing",
+      "centerMeters": {
+        "x": 2.05,
+        "y": -0.21657142857142858,
+        "z": 1.9695419426048564
+      },
+      "halfExtentsMeters": {
+        "x": 0.33499999999999996,
+        "y": 0.14657142857142857,
+        "z": 1.4978752759381897
+      }
+    },
+    {
+      "id": "aft-wing-starboard-01",
+      "nodeName": "COLLISION_AFT_WING_STARBOARD_01",
+      "kind": "wing",
+      "centerMeters": {
+        "x": 2.67,
+        "y": -0.23096428571428573,
+        "z": 2.09256320839182
+      },
+      "halfExtentsMeters": {
+        "x": 0.3350000000000001,
+        "y": 0.1388214285714286,
+        "z": 1.5917424572400782
+      }
+    },
+    {
+      "id": "aft-wing-starboard-02",
+      "nodeName": "COLLISION_AFT_WING_STARBOARD_02",
+      "kind": "wing",
+      "centerMeters": {
+        "x": 3.29,
+        "y": -0.24535714285714286,
+        "z": 2.316356178812446
+      },
+      "halfExtentsMeters": {
+        "x": 0.33499999999999985,
+        "y": 0.1310714285714286,
+        "z": 1.4868888543001368
+      }
+    },
+    {
+      "id": "aft-wing-starboard-03",
+      "nodeName": "COLLISION_AFT_WING_STARBOARD_03",
+      "kind": "wing",
+      "centerMeters": {
+        "x": 3.9099999999999997,
+        "y": -0.25975000000000004,
+        "z": 2.429528211504647
+      },
+      "halfExtentsMeters": {
+        "x": 0.3350000000000001,
+        "y": 0.12332142857142861,
+        "z": 1.271414843706034
+      }
+    },
+    {
+      "id": "aft-wing-starboard-04",
+      "nodeName": "COLLISION_AFT_WING_STARBOARD_04",
+      "kind": "wing",
+      "centerMeters": {
+        "x": 4.529999999999999,
+        "y": -0.27414285714285713,
+        "z": 2.480588733551049
+      },
+      "halfExtentsMeters": {
+        "x": 0.3350000000000001,
+        "y": 0.11557142857142857,
+        "z": 0.993829322466132
+      }
+    },
+    {
+      "id": "aft-wing-starboard-05",
+      "nodeName": "COLLISION_AFT_WING_STARBOARD_05",
+      "kind": "wing",
+      "centerMeters": {
+        "x": 5.15,
+        "y": -0.28853571428571434,
+        "z": 2.5316492555974506
+      },
+      "halfExtentsMeters": {
+        "x": 0.3350000000000001,
+        "y": 0.1078214285714286,
+        "z": 0.7162438012262301
+      }
+    },
+    {
+      "id": "aft-wing-starboard-06",
+      "nodeName": "COLLISION_AFT_WING_STARBOARD_06",
+      "kind": "wing",
+      "centerMeters": {
+        "x": 5.77,
+        "y": -0.30292857142857144,
+        "z": 2.582709777643853
+      },
+      "halfExtentsMeters": {
+        "x": 0.3350000000000001,
+        "y": 0.10007142857142859,
+        "z": 0.438658279986328
+      }
+    },
+    {
+      "id": "gear-nose-strut",
+      "nodeName": "COLLISION_GEAR_NOSE_STRUT",
+      "kind": "gear",
+      "centerMeters": {
+        "x": 0,
+        "y": -1.1275,
+        "z": -3.425
+      },
+      "halfExtentsMeters": {
+        "x": 0.14,
+        "y": 1.0375,
+        "z": 0.265
+      }
+    },
+    {
+      "id": "gear-nose-pad",
+      "nodeName": "COLLISION_GEAR_NOSE_PAD",
+      "kind": "gear",
+      "centerMeters": {
+        "x": 0,
+        "y": -2.1125000000000003,
+        "z": -3.55
+      },
+      "halfExtentsMeters": {
+        "x": 0.43,
+        "y": 0.0875,
+        "z": 0.51
+      }
+    },
+    {
+      "id": "gear-port-strut",
+      "nodeName": "COLLISION_GEAR_PORT_STRUT",
+      "kind": "gear",
+      "centerMeters": {
+        "x": -1.95,
+        "y": -1.2125,
+        "z": 2.475
+      },
+      "halfExtentsMeters": {
+        "x": 0.46999999999999986,
+        "y": 0.9525,
+        "z": 0.16499999999999992
+      }
+    },
+    {
+      "id": "gear-port-pad",
+      "nodeName": "COLLISION_GEAR_PORT_PAD",
+      "kind": "gear",
+      "centerMeters": {
+        "x": -2.28,
+        "y": -2.1125000000000003,
+        "z": 2.5
+      },
+      "halfExtentsMeters": {
+        "x": 0.43,
+        "y": 0.0875,
+        "z": 0.51
+      }
+    },
+    {
+      "id": "gear-starboard-strut",
+      "nodeName": "COLLISION_GEAR_STARBOARD_STRUT",
+      "kind": "gear",
+      "centerMeters": {
+        "x": 1.95,
+        "y": -1.2125,
+        "z": 2.475
+      },
+      "halfExtentsMeters": {
+        "x": 0.46999999999999986,
+        "y": 0.9525,
+        "z": 0.16499999999999992
+      }
+    },
+    {
+      "id": "gear-starboard-pad",
+      "nodeName": "COLLISION_GEAR_STARBOARD_PAD",
+      "kind": "gear",
+      "centerMeters": {
+        "x": 2.28,
+        "y": -2.1125000000000003,
+        "z": 2.5
+      },
+      "halfExtentsMeters": {
+        "x": 0.43,
+        "y": 0.0875,
+        "z": 0.51
+      }
+    }
+  ],
+  "minimumBellyClearanceMeters": 1.385000002384186,
+  "maximumLandingSlopeDegrees": 22,
+  "maximumPadHeightSpreadMeters": 0.65,
+  "sha256": "b1f556ac337db691438f41ed01385d16d9fcb1deb901568cf78cc2532cc895c8",
+  "byteLength": 252864,
+  "triangleCount": 3420,
+  "collisionTriangleCount": 684,
+  "materialCount": 3,
+  "opaqueDrawCount": 10,
+  "stowedBoundsMeters": {
+    "min": {
+      "x": -2.7099998593330383,
+      "y": -0.8050000071525574,
+      "z": -3.700000047683716
+    },
+    "max": {
+      "x": 2.7099998593330383,
+      "y": -0.025000012977321295,
+      "z": 4.584999932465139
+    }
+  },
+  "deployedBoundsMeters": {
+    "min": {
+      "x": -2.710000007152557,
+      "y": -2.2000000762939456,
+      "z": -4.059999990463257
+    },
+    "max": {
+      "x": 2.710000007152557,
+      "y": -0.025000001788139353,
+      "z": 7.199999761581421
+    }
+  }
+}

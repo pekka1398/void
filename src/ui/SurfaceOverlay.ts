@@ -1,4 +1,3 @@
-import './surface-overlay.css';
 
 export interface SurfaceOverlaySnapshot {
   readonly surfacePhase: string;
