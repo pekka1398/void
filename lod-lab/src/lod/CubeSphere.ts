@@ -1,4 +1,4 @@
-import type { Vec3 } from '../core';
+import type { Vec3 } from './Vec3';
 import type { CubeFace } from './TileKey';
 
 interface FaceFrame {

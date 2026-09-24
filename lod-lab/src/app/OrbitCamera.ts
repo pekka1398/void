@@ -1,4 +1,4 @@
-import type { Vec3 } from '../../core';
+import type { Vec3 } from '../lod/Vec3';
 
 export interface OrbitCameraPose {
   /** Body-fixed meters. */

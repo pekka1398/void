@@ -1,12 +1,9 @@
-// Headless invariants for src/lod: winding, seams, coverage, no overlaps, refinement by altitude.
-// Run with `npm run check:lod`.
-import { UniverseCatalog } from '../src/universe';
-import { createPlanetField, samplePlanetField } from '../src/fields';
-import { PlanetLod, buildTileMesh, buildTileIndices, tileUvBounds, cubeToSphere, type LodNode } from '../src/lod';
+// Headless invariants for the lab's own LOD core and fixture.
+import { PlanetLod, buildTileMesh, buildTileIndices, tileUvBounds, type LodNode } from './src/lod';
+import { DEMO_MAX_HEIGHT_METERS, DEMO_RADIUS_METERS, sampleDemoSurface } from './src/app/DemoSurface';
 
-const field = createPlanetField(new UniverseCatalog().heroPlanet);
-const R = field.radiusMeters, N = 33;
-const sampler = (d: any) => { const s = samplePlanetField(field, d); return { heightMeters: s.radialMeters - R, color: s.color }; };
+const R = DEMO_RADIUS_METERS, N = 33;
+const sampler = sampleDemoSurface;
 let fail = 0; const check = (ok: boolean, msg: string) => { if (!ok) { fail++; console.log('FAIL', msg); } };
 
 // 1. winding: grid triangle normals point outward; skirt triangles point away from tile center
@@ -57,7 +54,7 @@ let fail = 0; const check = (ok: boolean, msg: string) => { if (!ok) { fail++; c
 }
 
 // 3. selection: full coverage without holes/overlaps, refinement grows as camera approaches
-const lod = new PlanetLod({ radiusMeters: R, minSurfaceHeightMeters: 0, maxSurfaceHeightMeters: field.maxHeightMeters,
+const lod = new PlanetLod({ radiusMeters: R, minSurfaceHeightMeters: 0, maxSurfaceHeightMeters: DEMO_MAX_HEIGHT_METERS,
   occluderRadiusMeters: R, resolution: N, maxLevel: 19 });
 const area = (n: LodNode) => { const { u0, v0, u1, v1 } = tileUvBounds(n.key); return (u1-u0)*(v1-v0); };
 let built = 0;
@@ -71,7 +68,7 @@ function settle(cam: {x:number,y:number,z:number}, culling: boolean, maxIter = 2
   return { sel: sel!, it: maxIter };
 }
 const dir = (() => { const v = { x: 0.22, y: 0.13, z: 0.97 }; const l = Math.hypot(v.x, v.y, v.z); return { x: v.x/l, y: v.y/l, z: v.z/l }; })();
-const ground = samplePlanetField(field, dir).radialMeters - R;
+const ground = sampleDemoSurface(dir).heightMeters;
 for (const clearance of [R*2, 1e6, 1e5, 1e4, 1e3, 100, 10]) {
   const r = R + ground + clearance, cam = { x: dir.x*r, y: dir.y*r, z: dir.z*r };
   const t0 = performance.now();
@@ -88,4 +85,4 @@ for (const clearance of [R*2, 1e6, 1e5, 1e4, 1e3, 100, 10]) {
 }
 console.log('tiles built total', built, 'cached', lod.cachedTileCount, 'nodes', lod.nodeCount);
 console.log(fail ? `${fail} FAILURES` : "ALL CHECKS PASSED");
-if (fail) process.exitCode = 1;
+if (fail) throw new Error(`${fail} LOD checks failed`);

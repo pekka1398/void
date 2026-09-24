@@ -1,14 +1,7 @@
-import type { PlanetField } from '../fields';
-import type { TileKey } from './TileKey';
-import { tileId } from './TileKey';
-import type { TileMeshData, TileMeshOptions } from './TileMeshBuilder';
+import { tileId } from '../lod/TileKey';
+import type { TileMeshData, TileMeshOptions } from '../lod/TileMeshBuilder';
+import type { TileRequest } from '../lod/PlanetLod';
 import type { TileWorkerRequest } from './tile.worker';
-
-export interface TileRequest {
-  readonly key: TileKey;
-  /** Higher builds first. */
-  readonly priority: number;
-}
 
 /**
  * Priority queue over a fixed set of workers. The wanted set is replaced
@@ -24,7 +17,6 @@ export class TileWorkerPool {
   private buildMillisecondsTotal = 0;
 
   constructor(
-    field: PlanetField,
     options: TileMeshOptions,
     private readonly onTile: (tile: TileMeshData) => void,
     workerCount = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 4) - 1)),
@@ -33,7 +25,7 @@ export class TileWorkerPool {
       const worker = new Worker(new URL('./tile.worker.ts', import.meta.url), { type: 'module' });
       worker.onmessage = (event: MessageEvent<TileMeshData>) => this.finish(worker, event.data);
       worker.onerror = (event) => console.error('tile worker failed', event.message);
-      const init: TileWorkerRequest = { type: 'init', field, options };
+      const init: TileWorkerRequest = { type: 'init', options };
       worker.postMessage(init);
       this.idle.push(worker);
     }

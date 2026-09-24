@@ -1,4 +1,4 @@
-import type { LodSelection, TileColorMode } from '../../lod';
+import type { LodSelection, TileColorMode } from '../lod';
 
 export interface DebugPanelHandlers {
   onFreeze(frozen: boolean): void;

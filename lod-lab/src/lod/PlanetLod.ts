@@ -1,8 +1,13 @@
-import type { Vec3 } from '../core';
+import type { Vec3 } from './Vec3';
 import { cubeToSphere } from './CubeSphere';
 import { CUBE_FACES, childKeys, rootKey, tileId, tileUvBounds, type TileKey } from './TileKey';
 import type { TileMeshData } from './TileMeshBuilder';
-import type { TileRequest } from './TileWorkerPool';
+
+export interface TileRequest {
+  readonly key: TileKey;
+  /** Higher builds first. */
+  readonly priority: number;
+}
 
 export interface PlanetLodOptions {
   readonly radiusMeters: number;

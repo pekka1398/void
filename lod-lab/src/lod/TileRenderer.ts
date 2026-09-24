@@ -12,7 +12,7 @@ import {
   vec3,
   vertexColor,
 } from 'three/tsl';
-import type { Vec3 } from '../core';
+import type { Vec3 } from './Vec3';
 import type { LodNode } from './PlanetLod';
 import { buildTileIndices, type TileMeshData } from './TileMeshBuilder';
 
