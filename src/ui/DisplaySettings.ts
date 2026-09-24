@@ -1,4 +1,3 @@
-import type { AudioMix } from '../audio/AudioSettings';
 import type { GraphicsQuality, RenderQualityTier } from '../render/GraphicsQuality';
 import type { NeonPhosphorMode } from '../render/post/NeonPhosphor';
 
@@ -7,14 +6,13 @@ export interface DisplaySettingsValues {
   look: NeonPhosphorMode;
 }
 
-export interface DisplaySettingsState extends DisplaySettingsValues, AudioMix {
+export interface DisplaySettingsState extends DisplaySettingsValues {
   effectiveQuality: RenderQualityTier;
   backend: string;
 }
 
 export interface DisplaySettingsOptions {
   readonly onApply: (values: DisplaySettingsValues) => string | undefined;
-  readonly onAudioMixChange?: (values: AudioMix) => void;
   readonly onOpenChange?: (open: boolean) => void;
 }
 
@@ -62,18 +60,6 @@ export class DisplaySettings {
           <p class="display-settings-look-note">Authentic preserves the expedition’s original neon-phosphor finish.</p>
         </fieldset>
 
-        <fieldset class="display-settings-section display-settings-audio">
-          <legend>Sound</legend>
-          <label class="display-settings-volume" for="display-settings-music">
-            <span>Music</span><output data-audio-volume="music" for="display-settings-music">85%</output>
-          </label>
-          <input class="display-settings-range" id="display-settings-music" type="range" name="music-volume" min="0" max="100" step="1" value="85" />
-          <label class="display-settings-volume" for="display-settings-sfx">
-            <span>Sound effects</span><output data-audio-volume="sfx" for="display-settings-sfx">60%</output>
-          </label>
-          <input class="display-settings-range" id="display-settings-sfx" type="range" name="sfx-volume" min="0" max="100" step="1" value="60" />
-          <p class="display-settings-audio-note">Sound changes are saved immediately.</p>
-        </fieldset>
 
         <p class="display-settings-backend" data-display="backend"></p>
         <p class="display-settings-compatibility" data-display="compatibility" role="status" hidden></p>
@@ -91,7 +77,6 @@ export class DisplaySettings {
     this.root.addEventListener('keydown', this.onKeyDown);
     this.root.addEventListener('cancel', this.onCancel);
     this.root.addEventListener('click', this.onClick);
-    this.form.addEventListener('input', this.onAudioInput);
     this.form.addEventListener('change', this.onChange);
     this.form.addEventListener('submit', this.onSubmit);
     parent.append(this.root);
@@ -115,7 +100,6 @@ export class DisplaySettings {
     );
     if (quality) quality.checked = true;
     if (look) look.checked = true;
-    this.setAudioMix(state);
     this.error.hidden = true;
     this.error.textContent = '';
     this.refresh();
@@ -146,7 +130,6 @@ export class DisplaySettings {
     this.root.removeEventListener('keydown', this.onKeyDown);
     this.root.removeEventListener('cancel', this.onCancel);
     this.root.removeEventListener('click', this.onClick);
-    this.form.removeEventListener('input', this.onAudioInput);
     this.form.removeEventListener('change', this.onChange);
     this.form.removeEventListener('submit', this.onSubmit);
     this.root.remove();
@@ -183,28 +166,6 @@ export class DisplaySettings {
       ? 'Save and reload'
       : 'Apply';
   }
-
-  private setAudioMix(mix: AudioMix): void {
-    const music = Math.round(Math.max(0, Math.min(1, mix.musicVolume)) * 100);
-    const effects = Math.round(Math.max(0, Math.min(1, mix.sfxVolume)) * 100);
-    this.root.querySelector<HTMLInputElement>('input[name="music-volume"]')!.value = String(music);
-    this.root.querySelector<HTMLInputElement>('input[name="sfx-volume"]')!.value = String(effects);
-    this.root.querySelector<HTMLOutputElement>('[data-audio-volume="music"]')!.value = `${music}%`;
-    this.root.querySelector<HTMLOutputElement>('[data-audio-volume="sfx"]')!.value = `${effects}%`;
-  }
-
-  private readonly onAudioInput = (event: Event): void => {
-    const target = event.target;
-    if (!(target instanceof HTMLInputElement)) return;
-    if (target.name !== 'music-volume' && target.name !== 'sfx-volume') return;
-    const mix: AudioMix = {
-      musicVolume: Number(this.root.querySelector<HTMLInputElement>('input[name="music-volume"]')!.value) / 100,
-      sfxVolume: Number(this.root.querySelector<HTMLInputElement>('input[name="sfx-volume"]')!.value) / 100,
-    };
-    this.setAudioMix(mix);
-    if (this.state) this.state = { ...this.state, ...mix };
-    this.options.onAudioMixChange?.(mix);
-  };
 
   private readonly onChange = (): void => {
     this.error.hidden = true;

@@ -23,10 +23,9 @@ const SHARED_INTERFACE_CONTROLS: PauseControlGroup = {
   title: 'Interface',
   rows: [
     { id: 'pause', label: 'Pause / resume', keys: ['Esc'] },
-    { id: 'settings', label: 'Graphics and sound', keys: ['G'] },
+    { id: 'settings', label: 'Graphics', keys: ['G'] },
     { id: 'map', label: 'System / galaxy chart', keys: ['M', 'Tab'] },
     { id: 'appearance', label: 'Cycle screen appearance', keys: ['N'] },
-    { id: 'audio', label: 'Mute / restore audio', keys: ['U'] },
     { id: 'celestial-time', label: 'Celestial time slower / faster', keys: ['[ / ]'] },
   ],
 };

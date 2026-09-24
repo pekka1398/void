@@ -1,13 +1,5 @@
 import * as THREE from 'three';
 import { positionLocal, uniform } from 'three/tsl';
-import { FlightAudio } from '../audio/FlightAudio';
-import {
-  AUDIO_MIX_STORAGE_KEY,
-  DEFAULT_AUDIO_MIX,
-  parseStoredAudioMix,
-  type AudioMix,
-} from '../audio/AudioSettings';
-import { SpaceMusic } from '../audio/SpaceMusic';
 import {
   AU_METERS,
   addAddressOffset,
@@ -165,7 +157,6 @@ import { measureOrbitalMotion } from '../ui/OrbitalTelemetry';
 const METERS_PER_RENDER_UNIT = WORLD_METERS_PER_RENDER_UNIT;
 const LIVE_MAP_REFRESH_INTERVAL_SECONDS = 1 / 8;
 const NEON_PHOSPHOR_STORAGE_KEY = 'void-explorer:display:neon-phosphor:v1';
-const AUDIO_STORAGE_KEY = 'void-explorer:audio:v1';
 
 type RichMapEntry = MapEntry & {
   parentId?: string;
@@ -446,14 +437,6 @@ interface ExposedGameState {
   launchEntered: boolean;
   launchVisible: boolean;
   pauseMenuOpen: boolean;
-  audioActive: boolean;
-  audioMuted: boolean;
-  musicVolume: number;
-  sfxVolume: number;
-  audioContextState: string;
-  musicActive: boolean;
-  audioActiveVoices: number;
-  engineAudioGain: number;
   blueFireParticleCount: number;
   exhaustDrawCalls: number;
   cosmicBiomeId: string;
@@ -491,8 +474,6 @@ declare global {
       resetPerformanceSamples: () => void;
       setViewMode: (mode: FlightViewMode) => FlightViewMode;
       setNeonPhosphorMode: (mode: NeonPhosphorMode) => NeonPhosphorMode;
-      setAudioMuted: (muted: boolean) => boolean;
-      setAudioMix: (mix: AudioMix) => AudioMix;
     };
   }
 }
@@ -546,7 +527,6 @@ export class GameApp {
   private shipOverlay!: ShipOverlay;
   private surfaceOverlay: SurfaceOverlay | undefined;
   private post!: NeonPostProcess;
-  private audio!: FlightAudio;
   private speedField!: SpeedField;
   private starfield!: CatalogStars;
   private nebula: THREE.Points | undefined;
@@ -808,26 +788,10 @@ export class GameApp {
       });
       this.displaySettings = new DisplaySettings(this.parent, {
         onApply: (values) => this.applyDisplaySettings(values),
-        onAudioMixChange: (mix) => this.setAudioMix(mix),
         onOpenChange: (open) => this.onDisplaySettingsOpenChange(open),
       });
       this.hud.onOpenPauseMenu = () => this.openPauseMenu();
       this.cockpitOverlay = new CockpitOverlay(this.parent);
-      let audioMuted = false;
-      let audioMix: AudioMix = DEFAULT_AUDIO_MIX;
-      try {
-        audioMuted = window.localStorage.getItem(AUDIO_STORAGE_KEY) === 'muted';
-        audioMix = parseStoredAudioMix(window.localStorage.getItem(AUDIO_MIX_STORAGE_KEY));
-      } catch {
-        // The music-forward defaults also work when preference storage is blocked.
-      }
-      this.audio = new FlightAudio({
-        muted: audioMuted,
-        ...audioMix,
-        musicFactory: (context, output) => new SpaceMusic(context, output, {
-          seed: this.catalog.seed,
-        }),
-      });
       this.inputRouter = new InputRouter({
         flight: this.flight,
         onFoot: this.surface.session.onFoot,
@@ -884,8 +848,6 @@ export class GameApp {
         resetPerformanceSamples: () => this.frameTiming.reset(),
         setViewMode: (mode: FlightViewMode) => this.setViewMode(mode),
         setNeonPhosphorMode: (mode: NeonPhosphorMode) => this.setNeonPhosphorMode(mode),
-        setAudioMuted: (muted: boolean) => this.setAudioMuted(muted),
-        setAudioMix: (mix: AudioMix) => this.setAudioMix(mix),
       };
       if (this.persistence.pendingSurfaceCheckpoint) {
         this.launchScreen?.setLoading('RESTORING PHYSICAL SURFACE CONTACT');
@@ -904,11 +866,10 @@ export class GameApp {
     }
   }
 
-  /** Begin real flight and unlock the licensed soundtrack in the same trusted user gesture. */
+  /** Begin real flight. */
   private enterGame(): void {
     if (this.gameplayEntered || !this.launchScreen?.ready || this.displaySettings?.isOpen) return;
     this.gameplayEntered = true;
-    void this.audio.activate();
     this.syncInputOwner();
     this.persistence.attachPagehide(window);
     this.simulationClock.reset(this.localEffectsSeconds);
@@ -920,7 +881,6 @@ export class GameApp {
     if (this.launchScreen?.ready) return;
     this.launchScreen?.setReady(buildLaunchPresentation(this.catalog, this.discoveries.state), {
       renderer: this.host.capabilities.backend,
-      audioMuted: this.audio.muted,
     });
   }
 
@@ -947,9 +907,6 @@ export class GameApp {
   private readonly onKeyDown = (event: KeyboardEvent) => {
     if (this.displaySettings?.isOpen || this.graphicsReloadPending) return;
     if (event.code !== 'Escape') this.syncInputOwner();
-    if (this.gameplayEntered && event.isTrusted && event.code !== 'KeyG' && event.code !== 'KeyU') {
-      void this.audio.activate();
-    }
     this.inputRouter.handleKeyDown(event);
     if (this.inputRouter.owner === 'flight' || this.inputRouter.owner === 'cockpit') {
       if (event.code === 'KeyA') this.bank = -1;
@@ -1065,7 +1022,6 @@ export class GameApp {
   private handleInputCommand(command: InputCommand, _event: KeyboardEvent): void {
     if (command === 'launch') { this.enterGame(); return; }
     if (command === 'toggle-settings') { this.openDisplaySettings(); return; }
-    if (command === 'toggle-audio') { this.setAudioMuted(!this.audio.muted); return; }
     if (!this.gameplayEntered) return;
     if (this.persistence.pendingSurfaceCheckpoint) {
       this.reportSurfaceCommand({ accepted: false, reason: 'restoring-surface-contact' });
@@ -1117,7 +1073,6 @@ export class GameApp {
     if (this.displaySettings?.isOpen || this.pauseMenu?.isOpen || this.graphicsReloadPending) return;
     if (!this.gameplayEntered) return;
     this.syncInputOwner();
-    void this.audio.activate();
     this.focusGameCanvas();
     if (this.inputRouter.handleOnFootPointerDown(event)) {
       event.preventDefault();
@@ -2432,29 +2387,7 @@ export class GameApp {
         shipRollRadians: this.renderShipPose.rollRadians,
       });
     }
-    this.audio.update({
-      paused: this.pauseMenu?.isOpen === true,
-      throttle: this.flight.state.throttle,
-      speedMetersPerSecond: this.flight.state.speedMetersPerSecond,
-      mode: this.flight.state.mode,
-      phase: this.flight.state.phase,
-      spoolProgress: this.flight.state.spoolProgress,
-      travelProgress: this.flight.state.travelProgress,
-      landed: this.flight.state.landed,
-      atmosphereDensity: this.currentAtmosphereFactor,
-      cockpit: this.activeObserver?.owner === 'ship-cockpit',
-      altitudeMeters: this.altitudeMeters,
-      surfacePhase: surfaceState.surfacePhase,
-      surfaceThrust: surfaceState.surfaceThrust,
-      surfaceEventSerial: surfaceState.eventSerial,
-      touchdownImpulseMetersPerSecond: surfaceState.touchdownImpulseMetersPerSecond,
-      occupancyPhase: occupancy.phase,
-      occupancyEventSerial: occupancy.eventSerial,
-      outside: occupancy.phase === 'outside',
-      walkingSpeedMetersPerSecond: occupancy.walkingSpeedMetersPerSecond,
-      grounded: occupancy.grounded,
-    }, effectsDelta);
-    const inputState = this.inputRouter.snapshot;
+        const inputState = this.inputRouter.snapshot;
     this.surfaceOverlay?.update({
       surfacePhase: surfaceState.surfacePhase,
       occupancyPhase: occupancy.phase,
@@ -3363,14 +3296,6 @@ export class GameApp {
       launchEntered: this.gameplayEntered,
       launchVisible: this.launchScreen?.active === true,
       pauseMenuOpen: this.pauseMenu?.isOpen === true,
-      audioActive: this.audio.active,
-      audioMuted: this.audio.muted,
-      musicVolume: this.audio.musicVolume,
-      sfxVolume: this.audio.sfxVolume,
-      audioContextState: this.audio.contextState,
-      musicActive: this.audio.musicActive,
-      audioActiveVoices: this.audio.activeVoices,
-      engineAudioGain: this.audio.engineGain,
       blueFireParticleCount: Number(this.worldShip.exhaust.group.userData.blueFireParticleCount ?? 0),
       exhaustDrawCalls: this.worldShip.exhaust.group.visible
         ? Number(this.worldShip.root.userData.boundedPropulsionDrawCalls ?? 0) : 0,
@@ -3395,30 +3320,6 @@ export class GameApp {
     };
   }
 
-  /** Mute the licensed soundtrack and authentic ship effects without changing universe state. */
-  setAudioMuted(muted: boolean): boolean {
-    const next = this.audio.setMuted(muted);
-    try {
-      window.localStorage.setItem(AUDIO_STORAGE_KEY, next ? 'muted' : 'enabled');
-    } catch {
-      // Sound preferences remain functional when browser storage is blocked.
-    }
-    if (!next) void this.audio.activate();
-    this.hud.notify(next ? 'AUDIO · MUTED' : 'AUDIO · MUSIC AND FLIGHT EFFECTS');
-    return next;
-  }
-
-  /** Save channel levels without unlocking audio, unmuting it, or touching the journey. */
-  setAudioMix(mix: AudioMix): AudioMix {
-    const next = this.audio.setMix(mix);
-    try {
-      window.localStorage.setItem(AUDIO_MIX_STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // Live volume controls remain usable when browser storage is blocked.
-    }
-    return next;
-  }
-
   /** Change display presentation without touching deterministic universe state. */
   setNeonPhosphorMode(mode: NeonPhosphorMode): NeonPhosphorMode {
     const nextMode = normalizeNeonPhosphorMode(mode);
@@ -3439,8 +3340,6 @@ export class GameApp {
       effectiveQuality: this.host.capabilities.quality,
       backend: this.host.capabilities.backend,
       look: this.neonPhosphorMode,
-      musicVolume: this.audio.musicVolume,
-      sfxVolume: this.audio.sfxVolume,
     });
   }
 
@@ -4093,7 +3992,6 @@ export class GameApp {
     this.pauseMenu?.dispose();
     this.parent.classList.remove('expedition-paused');
     this.launchScreen?.dispose();
-    this.audio?.dispose();
     this.inputRouter?.dispose();
     this.flight?.dispose();
     window.removeEventListener('resize', this.onResize);

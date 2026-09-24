@@ -11,7 +11,6 @@ export interface LaunchScreenOptions {
 
 export interface LaunchReadyOptions {
   readonly renderer?: string;
-  readonly audioMuted?: boolean;
 }
 
 type LaunchScreenState = 'loading' | 'ready' | 'launching' | 'error';
@@ -99,7 +98,6 @@ export class LaunchScreen {
 
       <footer class="launch-footer">
         <span class="launch-footer-copy">THE UNIVERSE IS REAL. THE JOURNEY IS YOURS.</span>
-        <span class="launch-music-credit">“Aphelion” by Scott Buckley · CC BY 4.0 · www.scottbuckley.com.au</span>
       </footer>
       <span class="launch-frame-corners" aria-hidden="true"></span>
     `;
@@ -146,7 +144,6 @@ export class LaunchScreen {
       : 'ONLINE';
     this.root.dataset.savedJourney = String(presentation.hasSavedJourney);
     this.root.dataset.launchSystemId = presentation.systemId;
-    this.root.dataset.audioMuted = String(options.audioMuted === true);
     this.root.setAttribute('aria-busy', 'false');
     this.setState('ready');
     this.startButton.disabled = false;
@@ -212,8 +209,6 @@ export class LaunchScreen {
     if (!this.ready) return;
     event.preventDefault();
     event.stopPropagation();
-    // Root invokes the actual AudioContext unlock immediately in this trusted
-    // click stack; never defer it behind an animation or microtask.
     this.onStart(event);
   };
 

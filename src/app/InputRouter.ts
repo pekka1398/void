@@ -12,7 +12,6 @@ export type InputCommand =
   | 'toggle-map'
   | 'toggle-view'
   | 'toggle-settings'
-  | 'toggle-audio'
   | 'cycle-presentation'
   | 'reset'
   | 'celestial-slower'
@@ -100,7 +99,6 @@ const COMMAND_KEYS: Readonly<Record<string, InputCommand>> = Object.freeze({
   Tab: 'toggle-map',
   KeyV: 'toggle-view',
   KeyG: 'toggle-settings',
-  KeyU: 'toggle-audio',
   KeyN: 'cycle-presentation',
   KeyR: 'reset',
   BracketLeft: 'celestial-slower',
@@ -168,9 +166,9 @@ export class InputRouter {
   acceptsCommand(command: InputCommand): boolean {
     if (this.disposed) return false;
     if (this.currentOwner === 'pause') {
-      return command === 'escape' || command === 'toggle-settings' || command === 'toggle-audio';
+      return command === 'escape' || command === 'toggle-settings';
     }
-    if (command === 'escape' || command === 'toggle-audio') return true;
+    if (command === 'escape') return true;
     if (command === 'launch') return this.currentOwner === 'launch';
     if (this.currentOwner === 'launch') return false;
     if (command === 'toggle-settings') return this.currentOwner !== 'transition';
