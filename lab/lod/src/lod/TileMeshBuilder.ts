@@ -13,7 +13,7 @@ export type SurfaceSampler = (bodyFixedDirection: Vec3) => SurfaceSample;
 export interface TileMeshData {
   readonly id: string;
   readonly key: TileKey;
-  /** Body-fixed float64 origin; every vertex position is float32 relative to it. */
+  /** Body-fixed float64 origin at the terrain surface of the tile centre; every vertex position is float32 relative to it. */
   readonly origin: Vec3;
   /** N*N grid vertices followed by 4*N skirt vertices (bottom, top, left, right edge). */
   readonly positions: Float32Array;
@@ -60,10 +60,13 @@ export function buildTileMesh(key: TileKey, sampler: SurfaceSampler, options: Ti
   const du = (u1 - u0) / (n - 1);
   const dv = (v1 - v0) / (n - 1);
 
+  // The surface point at the tile centre: vertex offsets from it stay about a tile
+  // size even on tall terrain, so their float32 copies keep sub-0.1 mm precision.
   const origin = cubeToSphere(key.face, (u0 + u1) / 2, (v0 + v1) / 2);
-  origin.x *= radius;
-  origin.y *= radius;
-  origin.z *= radius;
+  const originRadius = radius + sampler(origin).heightMeters;
+  origin.x *= originRadius;
+  origin.y *= originRadius;
+  origin.z *= originRadius;
 
   // Extended grid in float64, relative to origin to keep later float32 conversion exact enough.
   const ex = new Float64Array(e * e * 3);
@@ -110,19 +113,19 @@ export function buildTileMesh(key: TileKey, sampler: SurfaceSampler, options: Ti
     for (let i = 0; i < n; i++) {
       const g = j * n + i;
       const c = ((j + 1) * e + (i + 1)) * 3;
-      positions[g * 3] = ex[c];
-      positions[g * 3 + 1] = ex[c + 1];
-      positions[g * 3 + 2] = ex[c + 2];
+      positions[g * 3] = ex[c]!;
+      positions[g * 3 + 1] = ex[c + 1]!;
+      positions[g * 3 + 2] = ex[c + 2]!;
       const l = c - 3;
       const r = c + 3;
       const d = c - e * 3;
       const t = c + e * 3;
-      const tux = ex[r] - ex[l];
-      const tuy = ex[r + 1] - ex[l + 1];
-      const tuz = ex[r + 2] - ex[l + 2];
-      const tvx = ex[t] - ex[d];
-      const tvy = ex[t + 1] - ex[d + 1];
-      const tvz = ex[t + 2] - ex[d + 2];
+      const tux = ex[r]! - ex[l]!;
+      const tuy = ex[r + 1]! - ex[l + 1]!;
+      const tuz = ex[r + 2]! - ex[l + 2]!;
+      const tvx = ex[t]! - ex[d]!;
+      const tvy = ex[t + 1]! - ex[d + 1]!;
+      const tvz = ex[t + 2]! - ex[d + 2]!;
       let nx = tuy * tvz - tuz * tvy;
       let ny = tuz * tvx - tux * tvz;
       let nz = tux * tvy - tuy * tvx;
@@ -155,20 +158,20 @@ export function buildTileMesh(key: TileKey, sampler: SurfaceSampler, options: Ti
   ];
   for (let edge = 0; edge < 4; edge++) {
     for (let s = 0; s < n; s++) {
-      const g = edgeVertex[edge](s);
+      const g = edgeVertex[edge]!(s);
       const k = n * n + edge * n + s;
-      const r = radius + heights[g] - skirtDepthMeters;
-      positions[k * 3] = dirs[g * 3] * r - origin.x;
-      positions[k * 3 + 1] = dirs[g * 3 + 1] * r - origin.y;
-      positions[k * 3 + 2] = dirs[g * 3 + 2] * r - origin.z;
-      normals[k * 3] = normals[g * 3];
-      normals[k * 3 + 1] = normals[g * 3 + 1];
-      normals[k * 3 + 2] = normals[g * 3 + 2];
-      colors[k * 3] = colors[g * 3];
-      colors[k * 3 + 1] = colors[g * 3 + 1];
-      colors[k * 3 + 2] = colors[g * 3 + 2];
-      grid[k * 3] = grid[g * 3];
-      grid[k * 3 + 1] = grid[g * 3 + 1];
+      const r = radius + heights[g]! - skirtDepthMeters;
+      positions[k * 3] = dirs[g * 3]! * r - origin.x;
+      positions[k * 3 + 1] = dirs[g * 3 + 1]! * r - origin.y;
+      positions[k * 3 + 2] = dirs[g * 3 + 2]! * r - origin.z;
+      normals[k * 3] = normals[g * 3]!;
+      normals[k * 3 + 1] = normals[g * 3 + 1]!;
+      normals[k * 3 + 2] = normals[g * 3 + 2]!;
+      colors[k * 3] = colors[g * 3]!;
+      colors[k * 3 + 1] = colors[g * 3 + 1]!;
+      colors[k * 3 + 2] = colors[g * 3 + 2]!;
+      grid[k * 3] = grid[g * 3]!;
+      grid[k * 3 + 1] = grid[g * 3 + 1]!;
       grid[k * 3 + 2] = 1;
     }
   }
@@ -194,7 +197,7 @@ export function buildTileMesh(key: TileKey, sampler: SurfaceSampler, options: Ti
 
 function measureHalfResolutionError(positions: Float32Array, n: number): number {
   let worst = 0;
-  const at = (i: number, j: number, axis: number) => positions[(j * n + i) * 3 + axis];
+  const at = (i: number, j: number, axis: number) => positions[(j * n + i) * 3 + axis]!;
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < n; i++) {
       const oddI = i & 1;
@@ -256,8 +259,8 @@ export function buildTileIndices(n: number): { indices: Uint32Array; gridIndexCo
   const reversed = [true, false, false, true];
   for (let edge = 0; edge < 4; edge++) {
     for (let s = 0; s < n - 1; s++) {
-      const e0 = edgeVertex[edge](s);
-      const e1 = edgeVertex[edge](s + 1);
+      const e0 = edgeVertex[edge]!(s);
+      const e1 = edgeVertex[edge]!(s + 1);
       const s0 = n * n + edge * n + s;
       const s1 = s0 + 1;
       if (reversed[edge]) {

@@ -236,8 +236,8 @@ function buildWireIndices(triangles: Uint32Array): Uint32Array {
   const edges: number[] = [];
   for (let i = 0; i < triangles.length; i += 3) {
     for (const [a, b] of [[triangles[i], triangles[i + 1]], [triangles[i + 1], triangles[i + 2]], [triangles[i + 2], triangles[i]]]) {
-      const lo = Math.min(a, b);
-      const hi = Math.max(a, b);
+      const lo = Math.min(a!, b!);
+      const hi = Math.max(a!, b!);
       const id = `${lo}/${hi}`;
       if (seen.has(id)) continue;
       seen.add(id);
@@ -294,15 +294,15 @@ export function stitchEdges(data: TileMeshData, seams: Partial<Record<FaceEdge, 
       const b = edgeVertex(coarseEdge, upper, n);
       for (let axis = 0; axis < 3; axis++) {
         const originAxis = axis === 0 ? coarse.origin.x - data.origin.x : axis === 1 ? coarse.origin.y - data.origin.y : coarse.origin.z - data.origin.z;
-        const target = originAxis + coarse.positions[a * 3 + axis] * (1 - blend) + coarse.positions[b * 3 + axis] * blend;
-        const delta = target - positions[destination * 3 + axis];
+        const target = originAxis + coarse.positions[a * 3 + axis]! * (1 - blend) + coarse.positions[b * 3 + axis]! * blend;
+        const delta = target - positions[destination * 3 + axis]!;
         positions[destination * 3 + axis] = target;
         const skirtEdge = edge === 'v-' ? 0 : edge === 'v+' ? 1 : edge === 'u-' ? 2 : 3;
         const skirt = n * n + skirtEdge * n + s;
         // Skirt vertices retain their original depth under the deformed edge.
-        positions[skirt * 3 + axis] += delta;
-        normals[destination * 3 + axis] = coarse.normals[a * 3 + axis] * (1 - blend) + coarse.normals[b * 3 + axis] * blend;
-        normals[skirt * 3 + axis] = normals[destination * 3 + axis];
+        positions[skirt * 3 + axis] = positions[skirt * 3 + axis]! + delta;
+        normals[destination * 3 + axis] = coarse.normals[a * 3 + axis]! * (1 - blend) + coarse.normals[b * 3 + axis]! * blend;
+        normals[skirt * 3 + axis] = normals[destination * 3 + axis]!;
       }
     }
   }

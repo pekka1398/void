@@ -1,6 +1,6 @@
 # Landing Lab
 
-Standalone experiment: landing on and taking off from a rotating planet with terrain. Free flight uses the orbit lab's physics core (`../orbit/src/orbit`), imported rather than copied, so a trajectory here is the same code as there. Contacts with the ground use Rapier in the planet's rotating frame.
+Standalone experiment: landing on and taking off from a rotating planet with terrain. Both the single-body lander and the interactive two-part rocket use the orbit lab's inertial propagator above the terrain band, then hand position and velocity to Rapier in the planet-fixed frame for near-ground contacts. The two-part rocket keeps an impulse-jointed pair in Rapier near the ground; in free flight its attached stack follows one integrated centre-of-mass state, and after staging each part follows its own orbit state.
 
 ```sh
 cd lab/landing
@@ -14,21 +14,24 @@ npm run dev        # interactive page
 ## Contracts with the other labs
 
 - **Terrain**: `SurfaceSampler` has the same signature as lab/lod's: a unit body-fixed direction goes in, and height above the reference radius plus a colour come out. Swapping in lab/lod's terrain means passing its function. `checkTerrainContract` checks any terrain for what the rest of this lab relies on: non-unit input throws, samples are deterministic, heights and colours stay in bounds, and a 1 cm step never changes the height by 1 m or more. It runs on this lab's terrain now, and should run on lab/lod's when that terrain is swapped in.
-- **Tiles**: collision tiles use lab/lod's cube-sphere (face frames, tangent warp, `face/level/x/y` keys), reimplemented here, so a collision tile and a rendered tile with the same key cover the same ground. One fixed level is used (about 300 m tiles); there is no LOD.
-- **Physics**: the orbit lab's core is used as is. Anything it needs for landing is added there, and the orbit lab's checks must keep passing.
-- **Axes**: body-fixed axes follow the orbit lab (z = spin axis, x = prime meridian). If lab/lod's axes differ, that is one fixed rotation to apply when merging.
+- **Tiles**: lab/lod's planet core is imported through `src/lodCore.ts` (like `orbitCore.ts`); changes it needs are made in lab/lod. Collision tiles and drawn tiles are both built by its `buildTileMesh`: Rapier gets the surface triangles, the renderer gets the whole tile. Collision uses one level (about 300 m tiles); drawing uses lab/lod's quadtree down to that level.
+- **Physics**: free-flight states use the orbit lab's inertial propagator. The near-ground Rapier world uses `PlanetFrame`; entering and leaving its altitude band converts the full position and velocity state. The two-stage rocket uses mass-weighted centre-of-mass propagation while attached and independent propagators after staging, and recreates its Rapier bodies when it re-enters the contact band. After staging each part crosses the band on its own clearance: a spent booster falling into Rapier leaves the upper stage in orbital propagation. Contact parts within half the recentre distance share one Rapier world; parts farther apart than the recentre distance get separate worlds. A part whose speed change from Rapier contacts in one step exceeds its crash tolerance (`crashToleranceMetersPerSecond`, default 10 m/s) is destroyed and removed, as in KSP; losing the upper stage ends the flight. This is off by default (`crashDetection = false`), so impacts only collide and can bounce.
+- **Encounter range hook**: `EncounterPhysicsGate` compares positions and velocities in one shared coordinate frame, predicting closest approach over the next propagation interval. It promotes a pair predicted to pass within 10 km and keeps it physical until it is beyond 15 km with no near pass predicted. A future docking implementation must put every active pair into a shared Rapier world before enabling mutual collision checks.
+- **Axes**: body-fixed axes follow the orbit lab (z = spin axis, x = prime meridian). lab/lod's core has no axis convention of its own: it takes body-fixed directions and a sampler. Only its lab page's camera and probe treat y as up.
 
 ## Planets
 
 - `pebble` (`src/planet/Planets.ts`): 100 km radius and a Moon-like 1.6 m/s² surface gravity, which makes it far denser than real rock. A 3.5 h spin moves the equator at 50 m/s, so rotating-frame effects are large enough to test. Placeholder hills reach up to 3 km.
 - The checks also run at Earth size (6371 km), so precision problems show up early.
 
-## Collision tiles (`src/terrain/CollisionTiles.ts`)
+## Terrain tiles (`src/terrain/TerrainTiles.ts`, `TerrainView.ts`)
 
-- A tile is a (cells + 1)² grid on the terrain with two triangles per cell, wound outward. It is built only near what can touch the ground.
+- A tile is lab/lod's `resolution`² grid (33 × 33 here) with two triangles per cell, wound outward. Collision builds one only near what can touch the ground.
 - Vertices are float32 offsets from a float64 origin on the terrain at the tile centre. On an Earth-size planet, vertices are within 6 µm of the terrain.
-- Shared edges are computed identically from either side. Neighbouring tiles, including three faces meeting at a cube corner, share every edge vertex to within float32 rounding (under 20 µm).
-- `tilesAround(point, reach)` returns every tile touching the surface within the reach.
+- Neighbouring tiles, including three faces meeting at a cube corner, share every edge vertex to within float32 rounding (under 20 µm).
+- `tilesAround(point, reach)` (lab/lod's `TileSearch.ts`) returns every tile touching the surface within the reach.
+- **Drawing**: `TerrainView` runs lab/lod's `PlanetLod` with every live rocket part as an observer, builds tiles in workers, and draws them with its `TileRenderer`. Workers rebuild the terrain from `TerrainConfig`, so their tiles are bit-identical to the main thread's. `landingLodOptions` sets the finest level to the collision level and splits early enough that every collision tile within `tileKeepMeters` of a part is drawn at that level with same-level neighbours, so the renderer never stitches its edges: the drawn triangles there are the collision triangles. The check tests this on the ground, at the top of collision range, at a cube corner, and for two parts 20 km apart.
+- The page uses Three.js's WebGPU renderer on its WebGL2 backend, as lab/lod does; one copy of `three` serves both (`vite.config.ts` dedupes it).
 
 ## Contacts in the rotating frame (`src/physics/`)
 
@@ -56,7 +59,7 @@ Not modelled: the frame's fictitious torques on spinning bodies (of order ω, 6e
 
 | Phase | Scope | State |
 |---|---|---|
-| P1 | Lab setup, terrain contract, collision tiles | done |
+| P1 | Lab setup, terrain contract, collision tiles (now lab/lod's tile builder) | done |
 | P2 | Rapier contacts in the rotating frame; drift and rest checks | done |
 | P3 | Hand-off between inertial free flight and live ground contacts | done |
 | P4 | Page: rendering, controls, camera frames, terrain-aware prediction | done |
@@ -69,10 +72,24 @@ Not modelled: the frame's fictitious torques on spinning bodies (of order ω, 6e
 
 ## Interactive page
 
-Open the Vite page, press **Space** to stage the engine, then raise the throttle. **Throttle 0** starts a coast without undoing the stage. The camera can follow either the rotating surface or inertial axes. The craft stays at the render origin for precision, while the terrain and planet move around it. Nearby visual tiles use the same mesh builder as contact tiles. A coarse planet mesh fills the distance behind them.
+The page's two-stage rocket has an upper stage and booster, each with its own fuel, render mesh, and compound collider. Near the ground they are Rapier rigid bodies connected by a fixed impulse joint. In free flight the attached stack follows one orbit-integrated centre-of-mass state; after staging, each part has its own orbit state and switches physics mode independently. Crossing the terrain band rebuilds the Rapier contact bodies from those states, so render meshes persist but Rapier body identities do not persist across physics-mode changes. The first Space press ignites the booster; the second removes the joint and applies equal and opposite separation impulses. Green outlines come from the collider shapes used by Rapier (cylinder, cone, struts, and foot pads), not a stand-in box. Contacts between the two parts stay enabled. Rapier's fixed joint is not rigid: with the seam contact disabled, the joint alone carried the booster's thrust and the stack bent and tipped over during a burn (the per-planet launch check caught it). The seam contact costs some steering response: one second of full pitch turns the page's rocket 32° rather than 40°, and the check's box-shaped stages, whose faces touch, far less.
 
-Keyboard controls follow the KSP decompile's `GameSettings.cs` and `FlightInputHandler.cs`: **Space** stages the engine once, **Shift/Ctrl** raise/lower throttle (about 50 percentage points per second), **W/S** pitch down/up, **A/D** yaw left/right, and **Q/E** roll left/right. The engine starts with 0% throttle and remains staged when throttle returns to zero. In contact, steering applies torque to the Rapier body and the rendered craft follows its actual rotation. In free flight, angular velocity accumulates under steering input and decays; the thrust axis follows the craft. This lab still has one engine and no multi-stage stack or SAS.
+Attitude is simulated in both modes. Near the ground Rapier integrates it. In free flight `vessel/Attitude.ts` repeats Rapier's angular step with each part's collider inertia (the attached stack adds the parallel-axis terms): steering torque, the gyroscopic term, rotation, then the same angular damping (0.8). Rotation and angular velocity are carried across every hand-off. It matches Rapier exactly at moderate spin; Rapier's implicit gyroscopic treatment drifts from it by a fraction of a degree only at several rad/s off-axis. While thrusting and turning, orbital propagation advances one physics step at a time so thrust follows the attitude.
 
-**Show collision meshes** overlays the unique triangle edges of loaded terrain colliders and the craft's Rapier box in white. The box reaches the bottoms of the visible landing legs, so those legs no longer extend below the contact shape.
+Both stages have visible engine bells. The active engine shows a throttle-driven exhaust plume and glow; the bell sits within the stage collider, while the exhaust is a visual effect without collision.
+
+Open the Vite page, press **Space** to ignite the booster, then raise the throttle. Press **Space** again to separate the booster and activate the upper engine. **Throttle 0** starts a coast without undoing the stage. The camera can follow either the rotating surface or inertial axes. The active connected group's centre of mass, then the upper part after separation, stays at the render origin for precision. The whole planet is drawn through lab/lod's quadtree, finest around each rocket part. "Show collision meshes" shows the drawn tiles' triangle edges; near the parts these are the collision triangles.
+
+Keyboard controls follow the KSP decompile's `GameSettings.cs` and `FlightInputHandler.cs`: **Space** advances staging, **Shift/Ctrl** raise/lower throttle (about 50 percentage points per second), **W/S** pitch down/up, **A/D** yaw left/right, and **Q/E** roll left/right. The engine starts with 0% throttle. Steering applies torque to the active upper part; the fixed joint carries it to the booster while attached. Thrust follows the engine part's actual rotation. There is no SAS.
+
+**Show collision meshes** overlays the unique triangle edges of loaded terrain colliders and the actual compound colliders of both parts in white.
 
 The cyan line is an engine-off forecast from the current state using the orbit lab's propagator, sampled against the terrain height function; its endpoint is the first terrain crossing. The forecast stops after 600 seconds if no crossing occurs. It is not a powered-flight plan, and it does not simulate the final Rapier bounce or rest. The coast-impact check drops a craft from 100 m and finds the terrain to within 0.01 m.
+
+## Not implemented yet
+
+- **Docking and multi-vessel physics:** `EncounterPhysicsGate` is a tested range and closest-approach policy only. Landing has no second-vessel registry, no shared Rapier world for two ships, no mutual vessel collision, and no docking-port capture or joint.
+- **Encounter prediction validation:** the gate uses constant relative velocity over the caller-provided next interval. Callers must check before advancing that interval; it is not yet connected to an encounter simulation loop and does not account for curvature during long look-aheads.
+- **Structural flex:** the attached stack is one rigid body in free flight and a stiff fixed joint near the ground; there is no bending or joint compliance model, and part offsets ignore each collider set's own centre of mass.
+- **Atmosphere and detailed landing systems:** there is no aerodynamic drag, heating, parachute model, suspension, or landing-leg deployment. The terrain is procedural placeholder relief; collision uses one tile level (drawing uses LOD).
+- **Landing guidance:** the cyan prediction is coast only. There is no powered landing planner/autopilot, SAS, or target-relative rendezvous guidance.

@@ -1,10 +1,9 @@
 import * as THREE from 'three/webgpu';
-import { PlanetLod, TileRenderer, type LodSelection } from '../lod';
+import { PlanetLod, TileRenderer, TileWorkerPool, type LodSelection } from '../lod';
 import { DebugPanel } from './DebugPanel';
 import { planetPreset, type PlanetPresetId } from './PlanetPresets';
 import { OrbitCamera } from './OrbitCamera';
 import { SphericalProbe, type ProbeAxis, type ProbeDrag } from './SphericalProbe';
-import { TileWorkerPool } from './TileWorkerPool';
 
 const root = document.querySelector<HTMLDivElement>('#app');
 if (!root) throw new Error('LOD lab root is missing');
@@ -75,7 +74,8 @@ function panic(error: unknown): never {
   root!.append(message);
   throw failure;
 }
-const workers = new TileWorkerPool({ radiusMeters: radius, resolution }, presetId as PlanetPresetId, (data) => {
+const workers = new TileWorkerPool(() => new Worker(new URL('./tile.worker.ts', import.meta.url), { type: 'module' }),
+  { radiusMeters: radius, resolution }, presetId as PlanetPresetId, (data) => {
   lod.acceptTile(data);
   lod.unpinBuild(data.id);
 }, panic, preset.workerCount, (id) => lod.pinBuild(id));
@@ -178,7 +178,7 @@ async function renderFrame(now: number): Promise<void> {
   probe.sync(pose.position);
   if (!frozen || !selection) {
     selection = lod.select({
-      observerPosition: probePosition,
+      observerPositions: [probePosition],
       distanceScale: lodDistanceScale,
       horizonCulling,
     });

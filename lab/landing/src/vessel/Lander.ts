@@ -3,7 +3,7 @@ import {
   bodyOrientation, PropagationRun, STANDARD_GRAVITY, VesselPropagator,
   type Ephemeris, type ThrustControl, type Tolerances, type Vec3,
 } from '../orbitCore';
-import { ContactWorld, type ContactWorldOptions, type Quaternion } from '../physics/ContactWorld';
+import { ContactWorld, type BodyShape, type ContactWorldOptions, type Quaternion } from '../physics/ContactWorld';
 import { PlanetFrame, type FrameState } from '../physics/PlanetFrame';
 import type { Terrain } from '../terrain/Surface';
 
@@ -16,7 +16,10 @@ export interface LanderSpec {
   fuelMassKg: number;
   /** The hull is a box; its local +y is the thrust axis ("up"). */
   halfExtents: Vec3;
+  contactShape?: BodyShape;
   friction: number;
+  /** Impact speed change a part survives in one contact step, m/s (KSP's crash tolerance); PartJointRocket requires it. */
+  crashToleranceMetersPerSecond?: number;
 }
 
 /**
@@ -286,7 +289,7 @@ export class Lander {
     const world = new ContactWorld(this.rapier, this.frame, this.terrain, this.options.contact, this.time, state.position);
     const { halfExtents, friction } = this.spec;
     const body = world.addBody(
-      { shape: { kind: 'box', halfExtents }, massKg: this.massKg, friction, restitution: 0, lockRotations: false },
+      { shape: this.spec.contactShape ?? { kind: 'box', halfExtents }, massKg: this.massKg, friction, restitution: 0, lockRotations: false },
       state, initialRotation, pushBefore,
     );
     this.contact = { world, body };

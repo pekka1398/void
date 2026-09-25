@@ -1,12 +1,47 @@
 import { GRAVITATIONAL_CONSTANT, type SystemSpec } from '../orbitCore';
-import { hillsTerrain } from '../terrain/HillsTerrain';
+import { terrainFromConfig, type TerrainConfig } from '../terrain/TerrainConfig';
 import type { Terrain } from '../terrain/Surface';
 
 /** A planet to land on: its gravity and spin (as an orbit-lab system) and its terrain. */
 export interface LandingPlanet {
+  /** Short label for the page badge. */
+  label: string;
   system: SystemSpec;
   bodyId: string;
+  /** Data the terrain is built from; tile workers rebuild the same terrain from it. */
+  terrainConfig: TerrainConfig;
   terrain: Terrain;
+}
+
+interface PlanetParameters {
+  id: string;
+  name: string;
+  color: string;
+  radiusMeters: number;
+  surfaceGravity: number;
+  rotationPeriodSeconds: number;
+  terrain: { maxHeightMeters: number; wavelengthMeters: number; octaves: number };
+}
+
+function landingPlanet(p: PlanetParameters): LandingPlanet {
+  const terrainConfig: TerrainConfig = { kind: 'hills', options: { name: `${p.name} hills`, radiusMeters: p.radiusMeters, ...p.terrain } };
+  const hours = p.rotationPeriodSeconds / 3600;
+  return {
+    label: `${p.name.toUpperCase()} · ${p.radiusMeters >= 1e6 ? `${(p.radiusMeters / 1e3).toFixed(0)} km` : `${p.radiusMeters / 1e3} km`} RADIUS · ${p.surfaceGravity} m/s² · ${hours < 48 ? `${hours.toFixed(1)} h` : `${(hours / 24).toFixed(1)} d`} DAY`,
+    bodyId: p.id,
+    system: {
+      name: p.name,
+      root: {
+        id: p.id, name: p.name, color: p.color,
+        massKg: (p.surfaceGravity * p.radiusMeters ** 2) / GRAVITATIONAL_CONSTANT,
+        radiusMeters: p.radiusMeters,
+        rotation: { periodSeconds: p.rotationPeriodSeconds, obliquityRadians: 0, poleLongitudeRadians: 0, angleAtEpochRadians: 0 },
+        children: [],
+      },
+    },
+    terrainConfig,
+    terrain: terrainFromConfig(terrainConfig),
+  };
 }
 
 /**
@@ -16,23 +51,26 @@ export interface LandingPlanet {
  */
 export function pebble(): LandingPlanet {
   const radiusMeters = 100e3;
-  const surfaceGravity = 1.6;
-  const equatorSpeed = 50;
-  return {
-    bodyId: 'pebble',
-    system: {
-      name: 'Pebble',
-      root: {
-        id: 'pebble', name: 'Pebble', color: '#6f8f5a',
-        massKg: (surfaceGravity * radiusMeters ** 2) / GRAVITATIONAL_CONSTANT,
-        radiusMeters,
-        rotation: {
-          periodSeconds: (2 * Math.PI * radiusMeters) / equatorSpeed,
-          obliquityRadians: 0, poleLongitudeRadians: 0, angleAtEpochRadians: 0,
-        },
-        children: [],
-      },
-    },
-    terrain: hillsTerrain({ name: 'Pebble hills', radiusMeters, maxHeightMeters: 3000, wavelengthMeters: 8000, octaves: 6 }),
-  };
+  return landingPlanet({ id: 'pebble', name: 'Pebble', color: '#6f8f5a', radiusMeters, surfaceGravity: 1.6,
+    rotationPeriodSeconds: (2 * Math.PI * radiusMeters) / 50, terrain: { maxHeightMeters: 3000, wavelengthMeters: 8000, octaves: 6 } });
+}
+
+/** The Moon's radius, gravity and 27.3-day spin, with placeholder hills up to 6 km. */
+export function moonSize(): LandingPlanet {
+  return landingPlanet({ id: 'luna', name: 'Luna', color: '#9a9a92', radiusMeters: 1_737_400, surfaceGravity: 1.62,
+    rotationPeriodSeconds: 27.321661 * 86_400, terrain: { maxHeightMeters: 6000, wavelengthMeters: 30_000, octaves: 8 } });
+}
+
+/** Earth's radius, gravity and sidereal day, with placeholder hills up to 8 km (the check's Earth-size terrain). */
+export function earthSize(): LandingPlanet {
+  return landingPlanet({ id: 'terra', name: 'Terra', color: '#4f7f4a', radiusMeters: 6_371_000, surfaceGravity: 9.81,
+    rotationPeriodSeconds: 86_164.1, terrain: { maxHeightMeters: 8000, wavelengthMeters: 40_000, octaves: 8 } });
+}
+
+export const PLANETS = { pebble, luna: moonSize, terra: earthSize } as const;
+export type PlanetId = keyof typeof PLANETS;
+
+export function planetById(id: string): LandingPlanet {
+  if (!Object.hasOwn(PLANETS, id)) throw new Error(`Planets.ts: unknown planet ${JSON.stringify(id)}; valid=${Object.keys(PLANETS).join(',')}`);
+  return PLANETS[id as PlanetId]();
 }

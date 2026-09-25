@@ -9,7 +9,7 @@
     "noEmit": true,
     "isolatedModules": true,
     "noUncheckedIndexedAccess": true,
-    "types": ["vite/client"]
+    "types": ["vite/client", "node"]
   },
-  "include": ["src", "landing-check.ts", "../orbit/src/orbit"]
+  "include": ["src", "landing-check.ts", "vite.config.ts", "../orbit/src/orbit", "../lod/src/lod"]
 }

@@ -152,7 +152,7 @@ export class DebugPanel {
       return;
     }
     if (code === 'KeyC') {
-      const next = COLOR_MODES[(COLOR_MODES.indexOf(this.colorSelect.value as TileColorMode) + 1) % COLOR_MODES.length];
+      const next = COLOR_MODES[(COLOR_MODES.indexOf(this.colorSelect.value as TileColorMode) + 1) % COLOR_MODES.length]!;
       this.colorSelect.value = next;
       this.handlers.onColorMode(next);
     } else if (code === 'BracketLeft' || code === 'BracketRight') {

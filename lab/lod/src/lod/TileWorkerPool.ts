@@ -1,15 +1,17 @@
-import { tileId } from '../lod/TileKey';
-import type { TileMeshData, TileMeshOptions } from '../lod/TileMeshBuilder';
-import type { TileRequest } from '../lod/PlanetLod';
-import type { TileWorkerRequest } from './tile.worker';
-import type { PlanetPresetId } from './PlanetPresets';
+import { tileId } from './TileKey';
+import type { TileMeshData, TileMeshOptions } from './TileMeshBuilder';
+import type { TileRequest } from './PlanetLod';
+import type { TileWorkerRequest } from './TileWorkerHost';
 
 /**
- * Priority queue over a fixed set of workers. The wanted set is replaced
- * every frame, so tiles no longer needed are dropped before they start.
+ * Priority queue over a fixed set of workers. The caller creates each worker
+ * (so its bundler sees the worker entry) and passes the structured-cloneable
+ * surface config that the worker entry's serveTileBuilds turns into a sampler.
+ * The wanted set is replaced every frame, so tiles no longer needed are
+ * dropped before they start.
  * One job per worker keeps priorities fresh; in-flight jobs always complete.
  */
-export class TileWorkerPool {
+export class TileWorkerPool<SurfaceConfig> {
   private readonly idle: Worker[] = [];
   private readonly busy = new Map<Worker, string>();
   private wanted: TileRequest[] = [];
@@ -20,8 +22,9 @@ export class TileWorkerPool {
   private finishMillisecondsTotal = 0;
 
   constructor(
+    createWorker: () => Worker,
     options: TileMeshOptions,
-    presetId: PlanetPresetId,
+    surface: SurfaceConfig,
     private readonly onTile: (tile: TileMeshData) => void,
     private readonly onFatal: (error: Error) => void,
     workerCount: number,
@@ -31,14 +34,14 @@ export class TileWorkerPool {
       throw new Error(`TileWorkerPool.ts: invalid workerCount=${workerCount}`);
     }
     for (let index = 0; index < workerCount; index++) {
-      const worker = new Worker(new URL('./tile.worker.ts', import.meta.url), { type: 'module' });
+      const worker = createWorker();
       worker.onmessage = (event: MessageEvent<TileMeshData>) => this.finish(worker, event.data);
       worker.onerror = (event) => {
         event.preventDefault();
         this.onFatal(new Error(`tile.worker.ts failed: ${event.message}; source=${event.filename}:${event.lineno}:${event.colno}; job=${this.busy.get(worker) ?? 'initialization'}; inFlight=${this.inFlight.size}`));
       };
       worker.onmessageerror = () => this.onFatal(new Error(`TileWorkerPool.ts: unreadable worker response; job=${this.busy.get(worker) ?? 'initialization'}`));
-      const init: TileWorkerRequest = { type: 'init', options, presetId };
+      const init: TileWorkerRequest<SurfaceConfig> = { type: 'init', options, surface };
       worker.postMessage(init);
       this.idle.push(worker);
     }
@@ -81,7 +84,7 @@ export class TileWorkerPool {
       this.onBuildStart(id);
       this.busy.set(worker, id);
       this.inFlight.add(id);
-      const message: TileWorkerRequest = { type: 'build', key: request.key };
+      const message: TileWorkerRequest<SurfaceConfig> = { type: 'build', key: request.key };
       worker.postMessage(message);
     }
   }

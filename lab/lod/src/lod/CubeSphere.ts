@@ -27,7 +27,7 @@ const QUARTER_PI = Math.PI / 4;
  * Shared edges evaluate the same cube point from either face.
  */
 export function cubeToSphere(face: CubeFace, u: number, v: number, out: Vec3 = { x: 0, y: 0, z: 0 }): Vec3 {
-  const { n, a, b } = FACE_FRAMES[face];
+  const { n, a, b } = FACE_FRAMES[face]!;
   const su = Math.tan(u * QUARTER_PI);
   const sv = Math.tan(v * QUARTER_PI);
   const x = n.x + a.x * su + b.x * sv;

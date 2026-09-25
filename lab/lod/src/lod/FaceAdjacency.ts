@@ -23,11 +23,11 @@ function edgeUv(edge: FaceEdge, t: number): readonly [number, number] {
   }
 }
 function cubePoint(face: CubeFace, u: number, v: number): Vec3 {
-  const frame = FACE_FRAMES[face];
+  const frame = FACE_FRAMES[face]!;
   return add(frame.n, add(scale(frame.a, u), scale(frame.b, v)));
 }
 function project(face: CubeFace, point: Vec3): readonly [number, number] {
-  const frame = FACE_FRAMES[face];
+  const frame = FACE_FRAMES[face]!;
   const denominator = dot(point, frame.n);
   if (denominator !== 1) throw new Error(`FaceAdjacency.ts project: point is not on face=${face}; point=${JSON.stringify(point)}; denominator=${denominator}`);
   return [dot(point, frame.a), dot(point, frame.b)];
@@ -45,9 +45,9 @@ function edgeCoordinate(edge: FaceEdge, u: number, v: number): number {
 function derive(face: CubeFace, edge: FaceEdge): FaceNeighbor {
   const [u, v] = edgeUv(edge, 0);
   const point = cubePoint(face, u, v);
-  const candidates = CUBE_FACES.filter((other) => other !== face && dot(point, FACE_FRAMES[other].n) === 1);
+  const candidates = CUBE_FACES.filter((other) => other !== face && dot(point, FACE_FRAMES[other]!.n) === 1);
   if (candidates.length !== 1) throw new Error(`FaceAdjacency.ts derive: expected one neighbor; face=${face}; edge=${edge}; point=${JSON.stringify(point)}; candidates=${candidates}`);
-  const neighbor = candidates[0];
+  const neighbor = candidates[0]!;
   const [midU, midV] = project(neighbor, point);
   const neighborEdge = edgeOf(midU, midV);
   const [endU, endV] = edgeUv(edge, 1);

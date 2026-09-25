@@ -30,4 +30,11 @@ The headless check also compares real L18 terrain vertices along every cube-face
 
 ## Boundary for later integration
 
-`src/lod/` owns the portable geometry and selection logic. It takes physical meters, a body fixed direction, and a caller supplied surface sampler. `src/app/` owns only this lab's camera, demo surface, worker pool, controls and page. The demo surface is a test fixture, not the game's planet generator. Integration can supply a different sampler and worker adapter while keeping the LOD core's tile keys, mesh buffers, and selection interface.
+`src/lod/` owns the portable geometry, selection and tile-building logic. It takes physical meters, a body fixed direction, and a caller supplied surface sampler. `src/app/` owns only this lab's camera, demo surface, worker entry, controls and page. The demo surface is a test fixture, not the game's planet generator.
+
+Other labs import `src/lod/` directly (lab/landing does, through `landing/src/lodCore.ts`); changes they need are made here and must keep `npm run check` passing. The core is typechecked with `noUncheckedIndexedAccess`, as its importers are.
+
+- `PlanetLod.select` takes `observerPositions`: a tile splits for its nearest observer and is horizon-culled only when it is below every observer's horizon.
+- A split tile's horizon-culled children are still built, queued after every visible tile. A rising observer's horizon keeps widening; without them, a child coming over it had no mesh, its parent (up to a whole cube face) was drawn instead, and neighbor balancing collapsed the fine ground beside it for a frame. `select` reports any such coarsening in `balanceCollapses`; the check flies an observer from the ground to 60 km and requires none.
+- `sphereToCube`, `tileContaining` and `tilesAround` (`TileSearch.ts`) map body-fixed points to tile keys, for callers that stream tiles around a craft.
+- `TileWorkerPool` takes a worker factory and a structured-cloneable surface config; the caller's worker entry calls `serveTileBuilds(config => sampler)`. The factory stays in the caller so its bundler sees the worker file.

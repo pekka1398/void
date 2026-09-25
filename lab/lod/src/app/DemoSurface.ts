@@ -31,7 +31,7 @@ function perlin(x: number, y: number, z: number): number {
   const fx = x - ix, fy = y - iy, fz = z - iz;
   const wx = fade(fx), wy = fade(fy), wz = fade(fz);
   const corner = (dx: number, dy: number, dz: number): number => {
-    const gradient = GRADIENTS[hash(ix + dx, iy + dy, iz + dz) % GRADIENTS.length];
+    const gradient = GRADIENTS[hash(ix + dx, iy + dy, iz + dz) % GRADIENTS.length]!;
     return (gradient[0] * (fx - dx) + gradient[1] * (fy - dy) + gradient[2] * (fz - dz)) * 0.7071067811865476;
   };
   const bottom = lerp(lerp(corner(0, 0, 0), corner(1, 0, 0), wx),

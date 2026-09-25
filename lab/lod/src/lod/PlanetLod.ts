@@ -6,6 +6,9 @@ import { FACE_EDGES } from './FaceAdjacency';
 import { selectedNeighbor } from './TileNeighbors';
 import { tileBufferBytes, type TileMeshData } from './TileMeshBuilder';
 
+/** Priority offset that queues culled children of split tiles after every visible request. */
+const CULLED_PREFETCH_PENALTY = 1e15;
+
 export interface TileRequest {
   readonly key: TileKey;
   /** Higher builds first. */
@@ -37,8 +40,12 @@ export const HOLMAN_SPLIT_DISTANCE_RATIOS: readonly number[] = [
 ];
 
 export interface LodView {
-  /** Body-fixed observation point in meters, independent of the viewing camera. */
-  readonly observerPosition: Vec3;
+  /**
+   * Body-fixed observation points in meters, independent of the viewing
+   * camera. A tile splits for its nearest observer and is horizon-culled only
+   * when it is below every observer's horizon.
+   */
+  readonly observerPositions: readonly Vec3[];
   readonly distanceScale: number;
   readonly horizonCulling: boolean;
 }
@@ -63,11 +70,29 @@ export interface LodNode {
 
 export type CullReason = 'horizon';
 
+/**
+ * One temporary coarsening by neighbor balancing: finer selected tiles under
+ * `parent` were replaced by it, because a neighbor at least two levels coarser
+ * could not be refined yet (its children were requested instead).
+ */
+export interface LodCollapse {
+  readonly parent: string;
+  readonly parentLevel: number;
+  /** Selected tiles the parent replaced, and the finest level among them. */
+  readonly replaced: number;
+  readonly finestReplacedLevel: number;
+  /** The coarse neighbor that forced it. */
+  readonly coarseNeighbor: string;
+  readonly coarseNeighborLevel: number;
+}
+
 export interface LodSelection {
   readonly frame: number;
   readonly render: readonly LodNode[];
   readonly requests: readonly TileRequest[];
   readonly culled: Readonly<Record<CullReason, number>>;
+  /** Balancing coarsenings applied this frame; empty when the selection was balanced by refinement alone. */
+  readonly balanceCollapses: readonly LodCollapse[];
   /** Nodes drawn at a finer level than wanted because their own data was missing. */
   readonly visited: number;
   readonly selectMilliseconds: number;
@@ -109,7 +134,7 @@ export class PlanetLod {
     }
     for (let level = 0; level < options.maxLevel; level++) {
       const ratio = options.splitDistanceRatios[level];
-      if (!(ratio > 0)) throw new Error(`PlanetLod.ts: invalid split distance ratio; level=${level}; ratio=${ratio}`);
+      if (ratio === undefined || !(ratio > 0)) throw new Error(`PlanetLod.ts: invalid split distance ratio; level=${level}; ratio=${ratio}`);
     }
     this.retainFrames = options.retainFrames ?? 90;
     this.maxCachedTiles = options.maxCachedTiles ?? 2_500;
@@ -165,28 +190,37 @@ export class PlanetLod {
     if (!Number.isFinite(view.distanceScale) || view.distanceScale <= 0) {
       throw new Error(`PlanetLod.ts select: invalid distance scale=${view.distanceScale}; frame=${this.frame}`);
     }
+    if (view.observerPositions.length === 0) throw new Error(`PlanetLod.ts select: no observers; frame=${this.frame}`);
+    for (const observer of view.observerPositions) {
+      if (!Number.isFinite(observer.x) || !Number.isFinite(observer.y) || !Number.isFinite(observer.z)) {
+        throw new Error(`PlanetLod.ts select: invalid observer=${JSON.stringify(observer)}; frame=${this.frame}`);
+      }
+    }
 
     const request = (node: LodNode, priority: number) => {
       if (!node.data && !requests.has(node.id)) requests.set(node.id, { key: node.key, priority });
     };
 
     const cullReason = (node: LodNode): CullReason | undefined => {
-      if (view.horizonCulling && this.belowHorizon(node, view.observerPosition)) return 'horizon';
+      if (view.horizonCulling && view.observerPositions.every((observer) => this.belowHorizon(node, observer))) return 'horizon';
       return undefined;
     };
 
     const distanceToPatch = (node: LodNode) => {
-      const delta = {
-        x: view.observerPosition.x - node.lodCenter.x,
-        y: view.observerPosition.y - node.lodCenter.y,
-        z: view.observerPosition.z - node.lodCenter.z,
-      };
       const halfSide = this.options.radiusMeters / 2 ** node.key.level;
-      const u = Math.max(0, Math.abs(dot3(delta, node.lodAxisU)) - halfSide);
-      const v = Math.max(0, Math.abs(dot3(delta, node.lodAxisV)) - halfSide);
-      const normal = node.centerDirection;
-      const radial = Math.max(0, Math.abs(dot3(delta, normal)) - this.options.lodSurfaceBandMeters);
-      return Math.hypot(u, v, radial);
+      let nearest = Number.POSITIVE_INFINITY;
+      for (const observer of view.observerPositions) {
+        const delta = {
+          x: observer.x - node.lodCenter.x,
+          y: observer.y - node.lodCenter.y,
+          z: observer.z - node.lodCenter.z,
+        };
+        const u = Math.max(0, Math.abs(dot3(delta, node.lodAxisU)) - halfSide);
+        const v = Math.max(0, Math.abs(dot3(delta, node.lodAxisV)) - halfSide);
+        const radial = Math.max(0, Math.abs(dot3(delta, node.centerDirection)) - this.options.lodSurfaceBandMeters);
+        nearest = Math.min(nearest, Math.hypot(u, v, radial));
+      }
+      return nearest;
     };
 
     const visit = (node: LodNode) => {
@@ -200,7 +234,7 @@ export class PlanetLod {
       if (!node.data) throw new Error(`PlanetLod.ts visit: visible node has no mesh; id=${node.id}; frame=${this.frame}; parent=${node.parent?.id ?? 'root'}`);
       const distance = distanceToPatch(node);
       const threshold = node.key.level < this.options.maxLevel
-        ? this.options.radiusMeters * this.options.splitDistanceRatios[node.key.level] * view.distanceScale : 0;
+        ? this.options.radiusMeters * this.options.splitDistanceRatios[node.key.level]! * view.distanceScale : 0;
       node.splitPriority = threshold - distance;
       const wantsSplit = distance < threshold && node.key.level < this.options.maxLevel;
       if (!wantsSplit) {
@@ -213,8 +247,14 @@ export class PlanetLod {
       for (const child of children) {
         child.lastUsedFrame = this.frame;
         if (child.data) continue;
-        // A child we cannot see does not need to exist before we split.
-        if (cullReason(child)) continue;
+        // A child we cannot see does not need to exist before we split, but it is built
+        // anyway (after every visible tile): when it comes over a widening horizon the parent
+        // can stay split, instead of redrawing coarse and forcing neighbor balancing to
+        // collapse the fine ground next to it.
+        if (cullReason(child)) {
+          request(child, node.splitPriority - CULLED_PREFETCH_PENALTY);
+          continue;
+        }
         ready = false;
         request(child, node.splitPriority);
       }
@@ -236,7 +276,8 @@ export class PlanetLod {
     }
 
     const traversalFinished = performance.now();
-    const balanced = this.balanceSelection(render, requests);
+    const balanceCollapses: LodCollapse[] = [];
+    const balanced = this.balanceSelection(render, requests, balanceCollapses);
     const balanceFinished = performance.now();
     const renderedIds = new Set(balanced.map((node) => node.id));
     for (const node of balanced) node.lastUsedFrame = this.frame;
@@ -247,6 +288,7 @@ export class PlanetLod {
       render: balanced,
       requests: [...requests.values()],
       culled,
+      balanceCollapses,
       visited,
       selectMilliseconds: finished - started,
       traversalMilliseconds: traversalFinished - started,
@@ -256,11 +298,12 @@ export class PlanetLod {
   }
 
   /** Refine coarse neighbors when ready; otherwise request them and temporarily coarsen the fine side. */
-  private balanceSelection(render: readonly LodNode[], requests: Map<string, TileRequest>): LodNode[] {
+  private balanceSelection(render: readonly LodNode[], requests: Map<string, TileRequest>, collapses: LodCollapse[]): LodNode[] {
     const selected = new Map(render.map((node) => [node.id, node]));
     let refining = true;
     for (let pass = 0; pass < 10_000; pass++) {
       const collapse = new Map<string, LodNode>();
+      const collapseCause = new Map<string, LodNode>();
       const split = new Map<string, [LodNode, LodNode, LodNode, LodNode]>();
       for (const node of selected.values()) {
         for (const edge of FACE_EDGES) {
@@ -275,6 +318,7 @@ export class PlanetLod {
               const parent = node.parent;
               if (!parent?.data) throw new Error(`PlanetLod.ts balanceSelection: fine tile has no ready parent; tile=${node.id}; edge=${edge}; neighbor=${neighbor.id}; frame=${this.frame}`);
               collapse.set(parent.id, parent);
+              if (!collapseCause.has(parent.id)) collapseCause.set(parent.id, neighbor);
             }
           }
         }
@@ -300,13 +344,23 @@ export class PlanetLod {
           selectedAncestor = selectedAncestor.parent;
         }
         if (alreadyCovered) continue;
+        let replaced = 0;
+        let finestReplacedLevel = parent.key.level;
         for (const node of selected.values()) {
           const levelDifference = node.key.level - parent.key.level;
           if (levelDifference >= 0 && node.key.face === parent.key.face &&
             Math.floor(node.key.x / 2 ** levelDifference) === parent.key.x &&
-            Math.floor(node.key.y / 2 ** levelDifference) === parent.key.y) selected.delete(node.id);
+            Math.floor(node.key.y / 2 ** levelDifference) === parent.key.y) {
+            selected.delete(node.id);
+            replaced++;
+            finestReplacedLevel = Math.max(finestReplacedLevel, node.key.level);
+          }
         }
         selected.set(parent.id, parent);
+        const cause = collapseCause.get(parent.id);
+        if (!cause) throw new Error(`PlanetLod.ts balanceSelection: collapse has no recorded cause; parent=${parent.id}; frame=${this.frame}`);
+        collapses.push({ parent: parent.id, parentLevel: parent.key.level, replaced, finestReplacedLevel,
+          coarseNeighbor: cause.id, coarseNeighborLevel: cause.key.level });
       }
     }
     throw new Error(`PlanetLod.ts balanceSelection: failed to converge; frame=${this.frame}; selected=${selected.size}; maxLevel=${this.options.maxLevel}`);
@@ -330,7 +384,7 @@ export class PlanetLod {
     const centerU = (u0 + u1) / 2;
     const centerV = (v0 + v1) / 2;
     const centerDirection = cubeToSphere(key.face, centerU, centerV);
-    const lodAxisU = tangentAxis(FACE_FRAMES[key.face].a, centerDirection);
+    const lodAxisU = tangentAxis(FACE_FRAMES[key.face]!.a, centerDirection);
     const node: LodNode = {
       key,
       id: tileId(key),
