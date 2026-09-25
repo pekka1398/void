@@ -88,8 +88,6 @@ function uniqueEdges(triangles: Uint32Array): Uint32Array {
   return new Uint32Array(edges);
 }
 let pathLine: THREE.Line | null = null;
-const impactDot = new THREE.Mesh(new THREE.SphereGeometry(4, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffca63 }));
-worldGroup.add(impactDot);
 function refreshTiles(p: Vec3): void {
   const clearance = lander.clearance();
   const wanted = new Set<string>();
@@ -239,8 +237,6 @@ function render(): void {
   refreshTiles(p);
   updatePrediction();
   if (pathLine) pathLine.visible = prediction !== null;
-  impactDot.visible = !(engineArmed && throttlePercent > 0) && prediction?.impact !== null && prediction !== null;
-  if (prediction?.impact) impactDot.position.set(prediction.impact.position.x, prediction.impact.position.z, -prediction.impact.position.y);
   const groundSpeed = Math.hypot(state.velocity.x, state.velocity.y, state.velocity.z);
   const eta = prediction?.impact ? `${Math.max(0, prediction.impact.time - lander.time).toFixed(0)} s` : '—';
   readout.innerHTML = `<div><span>Mode</span><b>${lander.mode}</b></div><div><span>Time</span><b>${lander.time.toFixed(1)} s</b></div><div><span>Height AGL</span><b>${Math.max(0, lander.clearance() - spec.halfExtents.y).toFixed(1)} m</b></div><div><span>Ground speed</span><b>${groundSpeed.toFixed(1)} m/s</b></div><div><span>Fuel</span><b>${lander.fuelKg.toFixed(1)} kg</b></div><div><span>Coast impact</span><b>${eta}</b></div>`;
