@@ -7,7 +7,8 @@ cd lab/landing
 npm ci
 npm run check      # headless checks
 npm run typecheck
-npm run build      # headless core; the page arrives in P4
+npm run build      # typecheck and bundle the page
+npm run dev        # interactive page
 ```
 
 ## Contracts with the other labs
@@ -58,10 +59,16 @@ Not modelled: the frame's fictitious torques on spinning bodies (of order ω, 6e
 | P1 | Lab setup, terrain contract, collision tiles | done |
 | P2 | Rapier contacts in the rotating frame; drift and rest checks | done |
 | P3 | Hand-off between inertial free flight and contacts; landed state; warp | done |
-| P4 | Page: rendering, controls, camera frames, terrain-aware prediction | |
+| P4 | Page: rendering, controls, camera frames, terrain-aware prediction | done |
 
 ## Flight and landing (`src/vessel/Lander.ts`)
 
 - A lander has three modes: inertial free flight with the orbit lab's propagator, rotating-frame Rapier contacts near the terrain, and a landed position pinned to the surface during time warp. The contact band has separate entry and exit heights to avoid repeated switching.
 - Thrust uses the same surface-relative direction law in both physics engines. Contact integration accounts for fuel lost during each step and carries the half-step thrust across mode changes.
 - The P3 check launches from a slope, crosses from contact to free flight and back, then settles on the ground. While clear of terrain, its trajectory stays within 5 mm of an independent run of the orbit lab's integrator. A separate controlled landing reaches 13.6 km and touches down below 1 m/s. A landed craft stays fixed on the surface through one day of time warp.
+
+## Interactive page
+
+Open the Vite page and click **Launch**. The throttle and surface-relative thrust direction are adjustable; **Cut engine** starts a coast. The camera can follow either the rotating surface or inertial axes. The craft stays at the render origin for precision, while the terrain and planet move around it. Nearby visual tiles use the same mesh builder as contact tiles. A coarse planet mesh fills the distance behind them.
+
+The cyan line is an engine-off forecast from the current state using the orbit lab's propagator, sampled against the terrain height function; the gold dot marks its first terrain crossing. The forecast stops after 600 seconds if no crossing occurs. It is not a powered-flight plan, and it does not simulate the final Rapier bounce or rest. The coast-impact check drops a craft from 100 m and finds the terrain to within 0.01 m.

@@ -3,6 +3,7 @@ import {
   buildSystem, distance, Ephemeris, PropagationRun, suggestedStepSeconds, VesselPropagator, type ThrustControl, type Vec3,
 } from './src/orbitCore';
 import { Lander, type LanderControl, type LanderOptions, type LanderSpec } from './src/vessel/Lander';
+import { predictCoast } from './src/vessel/CoastPrediction';
 import { ContactWorld, type ContactWorldOptions } from './src/physics/ContactWorld';
 import { PlanetFrame, type FrameState } from './src/physics/PlanetFrame';
 import type { Terrain } from './src/terrain/Surface';
@@ -393,6 +394,22 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
   const sequence = ['landed', ...lander.modeChanges.map((c) => c.to)].join(' -> ');
   check('hop and land', lander.mode === 'landed' && peak > 9000 && touchdownSpeed < 3 && lander.fuelKg > 0,
     `${sequence}; peak ${(peak / 1e3).toFixed(1)} km, touchdown at ${touchdownSpeed.toFixed(2)} m/s, landed ${(drift / 1e3).toFixed(2)} km from the launch site after ${lander.time.toFixed(0)} s, ${lander.fuelKg.toFixed(0)} kg fuel left (last speed ${lastSpeed.toFixed(2)} m/s)`);
+}
+
+// The visual coast line uses the orbit integrator and must stop on sampled terrain.
+{
+  const env = plainPebble();
+  const d = { x: 1, y: 0, z: 0 };
+  const r = env.terrain.radiusMeters + env.terrain.sample(d).heightMeters + 100;
+  const state = { position: { x: r, y: 0, z: 0 }, velocity: { x: 0, y: 0, z: 0 } };
+  const path = predictCoast(env.ephemeris, env.frame, env.terrain, FRAME_TOLERANCES, 0, state, 2000, 100);
+  const hit = path.impact;
+  const p = hit?.position;
+  const distanceToCentre = p ? Math.hypot(p.x, p.y, p.z) : Infinity;
+  const direction = p ? { x: p.x / distanceToCentre, y: p.y / distanceToCentre, z: p.z / distanceToCentre } : d;
+  const surface = env.terrain.radiusMeters + env.terrain.sample(direction).heightMeters;
+  check('coast terrain impact', !!hit && hit.time > 5 && hit.time < 30 && Math.abs(distanceToCentre - surface) < 0.01,
+    `100 m drop reaches sampled terrain after ${hit?.time.toFixed(2) ?? '—'} s, height error ${fmt(distanceToCentre - surface)} m`);
 }
 
 if (failures.length > 0) {
