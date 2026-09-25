@@ -71,4 +71,6 @@ Not modelled: the frame's fictitious torques on spinning bodies (of order ω, 6e
 
 Open the Vite page and click **Launch**. The throttle and surface-relative thrust direction are adjustable; **Cut engine** starts a coast. The camera can follow either the rotating surface or inertial axes. The craft stays at the render origin for precision, while the terrain and planet move around it. Nearby visual tiles use the same mesh builder as contact tiles. A coarse planet mesh fills the distance behind them.
 
+**Show collision meshes** overlays the unique triangle edges of loaded terrain colliders and the craft's Rapier box in white. The box reaches the bottoms of the visible landing legs, so those legs no longer extend below the contact shape.
+
 The cyan line is an engine-off forecast from the current state using the orbit lab's propagator, sampled against the terrain height function; the gold dot marks its first terrain crossing. The forecast stops after 600 seconds if no crossing occurs. It is not a powered-flight plan, and it does not simulate the final Rapier bounce or rest. The coast-impact check drops a craft from 100 m and finds the terrain to within 0.01 m.

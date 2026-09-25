@@ -9,7 +9,7 @@ import type { Terrain } from './terrain/Surface';
 import './style.css';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
-app.innerHTML = `<canvas id="view"></canvas><aside class="panel"><div class="eyebrow">VOID / PHYSICS LAB 03</div><h1>Landing</h1><p>Land and launch on a rotating planet.</p><div class="readout" id="readout"></div><label>Throttle <strong id="throttleValue">0%</strong><input id="throttle" type="range" min="0" max="100" value="0"></label><div class="buttons"><button id="launch">Launch</button><button id="cut">Cut engine</button><button id="reset">Reset</button></div><label>Thrust direction<select id="direction"><option value="up">Surface up</option><option value="retro">Surface retrograde</option><option value="pro">Surface prograde</option></select></label><label>Camera frame<select id="frame"><option value="surface">Rotating surface</option><option value="inertial">Inertial</option></select></label><label>Time rate<select id="rate"><option value="1">1×</option><option value="5">5×</option><option value="20">20×</option><option value="100">100× (landed only)</option></select></label><p class="hint">Drag to orbit camera · scroll to zoom. The cyan line forecasts a coast with the engine off; its dot is the terrain impact.</p><div id="error"></div></aside><div class="badge">PEBBLE · 100 km RADIUS · 3.5 h DAY</div>`;
+app.innerHTML = `<canvas id="view"></canvas><aside class="panel"><div class="eyebrow">VOID / PHYSICS LAB 03</div><h1>Landing</h1><p>Land and launch on a rotating planet.</p><div class="readout" id="readout"></div><label>Throttle <strong id="throttleValue">0%</strong><input id="throttle" type="range" min="0" max="100" value="0"></label><div class="buttons"><button id="launch">Launch</button><button id="cut">Cut engine</button><button id="reset">Reset</button></div><label>Thrust direction<select id="direction"><option value="up">Surface up</option><option value="retro">Surface retrograde</option><option value="pro">Surface prograde</option></select></label><label>Camera frame<select id="frame"><option value="surface">Rotating surface</option><option value="inertial">Inertial</option></select></label><label>Time rate<select id="rate"><option value="1">1×</option><option value="5">5×</option><option value="20">20×</option><option value="100">100× (landed only)</option></select></label><label class="check"><input id="colliderLines" type="checkbox" checked> Show collision meshes</label><p class="hint">Drag to orbit camera · scroll to zoom. White lines show the loaded ground and craft colliders. The cyan line forecasts a coast with the engine off; its dot is the terrain impact.</p><div id="error"></div></aside><div class="badge">PEBBLE · 100 km RADIUS · 3.5 h DAY</div>`;
 const canvas = document.querySelector<HTMLCanvasElement>('#view')!;
 const readout = document.querySelector<HTMLElement>('#readout')!;
 const throttleInput = document.querySelector<HTMLInputElement>('#throttle')!;
@@ -17,13 +17,15 @@ const throttleValue = document.querySelector<HTMLElement>('#throttleValue')!;
 const directionInput = document.querySelector<HTMLSelectElement>('#direction')!;
 const frameInput = document.querySelector<HTMLSelectElement>('#frame')!;
 const rateInput = document.querySelector<HTMLSelectElement>('#rate')!;
+const colliderLinesInput = document.querySelector<HTMLInputElement>('#colliderLines')!;
 const error = document.querySelector<HTMLElement>('#error')!;
 const planet = pebble();
 const terrain = planet.terrain;
 const eph = new Ephemeris(buildSystem(planet.system), { stepSeconds: 60, chunkSteps: 1024 });
 eph.extendTo(60);
 const spec: LanderSpec = { thrustNewtons: 20_000, specificImpulseSeconds: 300, dryMassKg: 1000, fuelMassKg: 1000,
-  halfExtents: { x: 1.5, y: 1, z: 1.5 }, friction: 0.8 };
+  // The visual legs reach y=-2; the rigid body's box must reach them too.
+  halfExtents: { x: 1.5, y: 2, z: 1.5 }, friction: 0.8 };
 const options: LanderOptions = { contact: { stepSeconds: 1 / 60, tileLevel: levelForTileSize(terrain.radiusMeters, 300), tileCells: 32,
   tileReachMeters: 300, tileKeepMeters: 600, recenterMeters: 1000 }, tolerances: { positionMeters: 1e-6, velocityMetersPerSecond: 1e-9 },
   bandEnterMeters: 200, bandExitMeters: 400, landedSpeed: 0.05, landedSeconds: 1 };
@@ -51,6 +53,12 @@ for (const x of [-1, 1]) for (const z of [-1, 1]) {
   leg.position.set(x * 1.35, -1.4, z * 1.35); craft.add(leg);
 }
 scene.add(craft);
+const hullColliderLines = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.BoxGeometry(2 * spec.halfExtents.x, 2 * spec.halfExtents.y, 2 * spec.halfExtents.z)),
+  new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: true }),
+);
+hullColliderLines.renderOrder = 2;
+craft.add(hullColliderLines);
 const flame = new THREE.Mesh(new THREE.ConeGeometry(0.6, 2.8, 12), new THREE.MeshBasicMaterial({ color: 0xffad39 }));
 flame.rotation.x = Math.PI; flame.position.y = -2.5; craft.add(flame);
 const farGeometry = new THREE.SphereGeometry(terrain.radiusMeters, 64, 40);
@@ -68,7 +76,20 @@ farGeometry.computeVertexNormals();
 const planetMesh = new THREE.Mesh(farGeometry, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, side: THREE.DoubleSide }));
 worldGroup.add(planetMesh);
 const tileGroup = new THREE.Group(); worldGroup.add(tileGroup);
-const visibleTiles = new Map<string, THREE.Mesh>();
+const visibleTiles = new Map<string, { mesh: THREE.Mesh; lines: THREE.LineSegments }>();
+const colliderLineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.72, depthTest: true });
+function uniqueEdges(triangles: Uint32Array): Uint32Array {
+  const seen = new Set<string>();
+  const edges: number[] = [];
+  for (let i = 0; i < triangles.length; i += 3) {
+    for (const [a, b] of [[triangles[i]!, triangles[i + 1]!], [triangles[i + 1]!, triangles[i + 2]!], [triangles[i + 2]!, triangles[i]!] ] as [number, number][]) {
+      const lo = Math.min(a, b), hi = Math.max(a, b);
+      const id = `${lo}/${hi}`;
+      if (!seen.has(id)) { seen.add(id); edges.push(lo, hi); }
+    }
+  }
+  return new Uint32Array(edges);
+}
 let pathLine: THREE.Line | null = null;
 const impactDot = new THREE.Mesh(new THREE.SphereGeometry(4, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffca63 }));
 worldGroup.add(impactDot);
@@ -91,10 +112,19 @@ function refreshTiles(p: Vec3): void {
     geometry.computeVertexNormals();
     const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0x91ac70, roughness: 1, side: THREE.DoubleSide }));
     mesh.position.set(tile.origin.x, tile.origin.z, -tile.origin.y);
-    tileGroup.add(mesh); visibleTiles.set(id, mesh);
+    const wireGeometry = new THREE.BufferGeometry();
+    wireGeometry.setAttribute('position', geometry.getAttribute('position'));
+    wireGeometry.setIndex(new THREE.BufferAttribute(uniqueEdges(tile.indices), 1));
+    const lines = new THREE.LineSegments(wireGeometry, colliderLineMaterial);
+    lines.position.copy(mesh.position);
+    lines.renderOrder = 1;
+    lines.visible = colliderLinesInput.checked;
+    tileGroup.add(mesh, lines); visibleTiles.set(id, { mesh, lines });
   }
-  for (const [id, mesh] of visibleTiles) if (!wanted.has(id)) {
-    tileGroup.remove(mesh); mesh.geometry.dispose(); (mesh.material as THREE.Material).dispose(); visibleTiles.delete(id);
+  for (const [id, tile] of visibleTiles) if (!wanted.has(id)) {
+    tileGroup.remove(tile.mesh, tile.lines);
+    tile.mesh.geometry.dispose(); (tile.mesh.material as THREE.Material).dispose();
+    tile.lines.geometry.dispose(); visibleTiles.delete(id);
   }
   // Keep the globe behind the local tiles so their streamed edge never opens
   // onto empty sky. Contact near the craft still uses the detailed tiles.
@@ -127,6 +157,10 @@ function command(): LanderControl {
 document.querySelector('#launch')!.addEventListener('click', () => { throttleInput.value = '100'; directionInput.value = 'up'; });
 document.querySelector('#cut')!.addEventListener('click', () => { throttleInput.value = '0'; });
 document.querySelector('#reset')!.addEventListener('click', () => { lander = Lander.landed(RAPIER, eph, 0, terrain, spec, options, 0, launchSite); throttleInput.value = '0'; predictionAt = -Infinity; prediction = null; paused = false; error.textContent = ''; });
+colliderLinesInput.addEventListener('change', () => {
+  for (const tile of visibleTiles.values()) tile.lines.visible = colliderLinesInput.checked;
+  hullColliderLines.visible = colliderLinesInput.checked;
+});
 function orientBody(p: Vec3, t: number): THREE.Vector3 {
   if (frameInput.value === 'surface') return new THREE.Vector3(p.x, p.z, -p.y);
   const a = bodyOrientation(lander.frame.body, t);
