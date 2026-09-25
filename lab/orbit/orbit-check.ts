@@ -4,7 +4,7 @@ import {
   type ThrustControl, Dopri5, Ephemeris, GRAVITATIONAL_CONSTANT, PropagationRun, SECONDS_PER_DAY,
   SECONDS_PER_JULIAN_YEAR, Trajectory, VesselPropagator, buildSystem, distance, length, orbitalPeriodSeconds,
   osculatingOrbit, solveKeplerElliptic, stateFromElements, sub, suggestedStepSeconds,
-  type BodySpec, type EllipticElements, type SystemSpec,
+  type Apsis, type BodySpec, type EllipticElements, type SystemSpec, type Vec3,
 } from './src/orbit';
 
 declare const process: { exit(code: number): never };
@@ -389,7 +389,7 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
     const vessel = sim.vessel;
     const planet = sim.ephemeris.bodyState(earth.index, 0);
     const h = cross(subVec(vessel.position, planet.position), subVec(vessel.velocity, planet.velocity));
-    const tiltFromEquator = Math.acos(dot(h, pole) / length(h)) / DEGREES;
+    const tiltFromEquator = Math.acos(Math.min(1, dot(h, pole) / length(h))) / DEGREES;
     const tiltFromEcliptic = Math.acos(h.z / length(h)) / DEGREES;
     check('equatorial frame and start orbit', distance(poleInFrame, { x: 0, y: 0, z: 1 }) < 1e-15 && tiltFromEquator < 1e-9 && Math.abs(tiltFromEcliptic - 23.44) < 1e-9,
       `spin axis is the frame's +z; start orbit ${tiltFromEquator.toExponential(1)} deg from the equator, ${tiltFromEcliptic.toFixed(2)} deg from the ecliptic`);
@@ -447,6 +447,34 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
   const halo = system.bodies.find((b) => b.id === 'halo')!;
   check('equatorial moon orbits', Math.abs(haze - 0.34854) < 0.01 && Math.abs(ember - 0.05) < 0.01 && Math.abs(halo.rotation.obliquityRadians / DEGREES - 28.05) < 0.01,
     `Haze ${haze.toFixed(3)} deg from Halo's equator (given 0.349; Halo's equator is ${(halo.rotation.obliquityRadians / DEGREES).toFixed(2)} deg from the ecliptic), Ember ${ember.toFixed(3)} deg from Velvet's`);
+}
+
+// --- Oblateness (J2) ----------------------------------------------------------------
+{
+  const J2 = 1.08262668e-3, RE = 6.378137e6;
+  const eph = new Ephemeris(buildSystem({ name: 'oblate', root: { ...body('earth', EARTH_MASS, EARTH_RADIUS), gravityField: { j2: J2, referenceRadiusMeters: RE } } }), {
+    stepSeconds: 600, chunkSteps: 512,
+  });
+  const a = RE + 400e3, inc = 51.6 * DEGREES;
+  const s0 = stateFromElements({ ...stateOrbit(a), inclinationRadians: inc }, MU_EARTH);
+  const run = new PropagationRun({ time: 0, position: s0.position, velocity: s0.velocity, massKg: 1000 });
+  const energy = (p: Vec3, v: Vec3): number => {
+    const r = length(p), sinLat = p.z / r;
+    return 0.5 * dot(v, v) - (MU_EARTH / r) * (1 - J2 * (RE / r) ** 2 * 0.5 * (3 * sinLat * sinLat - 1));
+  };
+  const node = (p: Vec3, v: Vec3): number => { const h = cross(p, v); return Math.atan2(h.x, -h.y); };
+  const e0 = energy(s0.position, s0.velocity);
+  const days = 10;
+  new VesselPropagator(eph, TOLERANCES).advance(run, days * SECONDS_PER_DAY, 1e7, null, null);
+  const st = run.state;
+  const drift = Math.abs(energy(st.position, st.velocity) / e0 - 1);
+  let dNode = (node(st.position, st.velocity) - node(s0.position, s0.velocity)) / DEGREES;
+  if (dNode > 180) dNode -= 360;
+  const n = Math.sqrt(MU_EARTH / a ** 3);
+  const expected = (-1.5 * n * J2 * (RE / a) ** 2 * Math.cos(inc) * days * SECONDS_PER_DAY) / DEGREES;
+  // A wrong J2 force (sign, factor) breaks energy at ~J2 = 1e-3; integration error over 40k steps is ~1e-8.
+  check('J2 node regression', Math.abs(dNode / expected - 1) < 0.01 && drift < 1e-7,
+    `400 km, 51.6 deg: node moved ${dNode.toFixed(2)} deg in ${days} d, secular theory ${expected.toFixed(2)} deg; energy with J2 potential drifts ${fmt(drift)}`);
 }
 
 // --- Thrust, rocket equation, finite burns -------------------------------------
@@ -692,7 +720,18 @@ function finishPlan(sim: Simulation): void {
       retentionSeconds: SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: 3600, planCoastSeconds: 5 * SECONDS_PER_DAY,
     });
     const earthI = lunar.bodyIndex('aurelia'), moonI = lunar.bodyIndex('selene');
-    lunar.addManeuver({ startTime: 3300, referenceBody: earthI, referenceMode: 'fixed', prograde: 3120, normal: 0, radial: 0 });
+    // Find a TLI time within the first orbit that passes Selene inside its sphere of influence.
+    const tli = (startTime: number) => ({ startTime, referenceBody: earthI, referenceMode: 'fixed' as const, prograde: 3120, normal: 0, radial: 0 });
+    lunar.addManeuver(tli(300));
+    let best: { start: number; flyby: Apsis } | null = null;
+    for (let start = 300; start < 6000; start += 60) {
+      lunar.replaceManeuver(0, tli(start));
+      finishPlan(lunar);
+      const pe = findApsides(lunar.plan.trajectory, lunar.ephemeris, moonI, lunar.plan.burns[0]!.endTime, 1)[0];
+      if (pe && !lunar.plan.impact && (!best || pe.distanceMeters < best.flyby.distanceMeters)) best = { start, flyby: pe };
+    }
+    if (!best || best.flyby.distanceMeters > lunar.system.bodies[moonI]!.sphereOfInfluenceMeters! / 2) throw new Error('no TLI reaches Selene');
+    lunar.replaceManeuver(0, tli(best.start));
     const tliEnd = lunar.plan.burns[0]!.endTime;
     finishPlan(lunar);
     const flyby = findApsides(lunar.plan.trajectory, lunar.ephemeris, moonI, tliEnd, 1)[0]!;

@@ -1,3 +1,4 @@
+import { spinAxis } from './BodyRotation';
 import { Dopri5 } from './Dopri5';
 import type { Ephemeris } from './Ephemeris';
 import type { Trajectory } from './Trajectory';
@@ -115,6 +116,8 @@ export class VesselPropagator {
   private readonly stepper = new Dopri5(DIM);
   private readonly bodyPositions: Float64Array;
   private readonly bodyVelocities: Float64Array;
+  /** Per body: spin axis (3), then 1.5 J2 GM R^2 (0 for a point mass). */
+  private readonly oblateness: Float64Array;
   private readonly yNext = new Float64Array(DIM);
   private readonly dyNext = new Float64Array(DIM);
   private readonly probeY = new Float64Array(DIM);
@@ -130,6 +133,11 @@ export class VesselPropagator {
     this.tolerances = tolerances;
     this.bodyPositions = new Float64Array(ephemeris.bodyCount * 3);
     this.bodyVelocities = new Float64Array(ephemeris.bodyCount * 3);
+    this.oblateness = new Float64Array(ephemeris.bodyCount * 4);
+    ephemeris.bodies.forEach((body, i) => {
+      const k = spinAxis(body);
+      this.oblateness.set([k.x, k.y, k.z, 1.5 * body.j2 * body.gm * body.j2ReferenceRadiusMeters ** 2], i * 4);
+    });
   }
 
   /** Unit thrust direction the law gives for a state at t. */
@@ -210,6 +218,7 @@ export class VesselPropagator {
     let ax = 0, ay = 0, az = 0;
     const x = y[0]!, yy = y[1]!, z = y[2]!;
     const bodies = this.ephemeris.bodies;
+    const obl = this.oblateness;
     for (let i = 0; i < bodies.length; i += 1) {
       const dx = positions[i * 3]! - x;
       const dyy = positions[i * 3 + 1]! - yy;
@@ -217,6 +226,18 @@ export class VesselPropagator {
       const r2 = dx * dx + dyy * dyy + dz * dz;
       const s = bodies[i]!.gm / (r2 * Math.sqrt(r2));
       ax += dx * s; ay += dyy * s; az += dz * s;
+      const c = obl[i * 4 + 3]!;
+      if (c !== 0) {
+        // J2 with r = vessel - body = -d and u = r.k:
+        // a = c / r^5 [(5 u^2 / r^2 - 1) r - 2 u k], c = 1.5 J2 GM R^2.
+        const kx = obl[i * 4]!, ky = obl[i * 4 + 1]!, kz = obl[i * 4 + 2]!;
+        const u = -(dx * kx + dyy * ky + dz * kz);
+        const f = c / (r2 * r2 * Math.sqrt(r2));
+        const radial = f * (5 * u * u / r2 - 1);
+        ax -= radial * dx + 2 * f * u * kx;
+        ay -= radial * dyy + 2 * f * u * ky;
+        az -= radial * dz + 2 * f * u * kz;
+      }
     }
     dy[0] = y[3]!; dy[1] = y[4]!; dy[2] = y[5]!;
     if (control) {

@@ -1,4 +1,4 @@
-import { bodyOrientation, equatorialAxes } from './BodyRotation';
+import { bodyOrientation, equatorialAxes, spinAxis } from './BodyRotation';
 import { STANDARD_GRAVITY } from './Constants';
 import { DominanceTree } from './Dominance';
 import { Ephemeris, suggestedStepSeconds } from './Ephemeris';
@@ -6,7 +6,7 @@ import { FlightPlan, type ApsisPlacement, type BurnSchedule, type ManeuverSpec }
 import { stateFromElements } from './Kepler';
 import { buildSystem, type BuiltSystem, type SystemSpec } from './SystemSpec';
 import { Trajectory } from './Trajectory';
-import { add, cross, dot, normalize, sub, type Vec3 } from './Vec3';
+import { add, cross, dot, length, normalize, scale, sub, type Vec3 } from './Vec3';
 import type { Basis } from './BodyRotation';
 import {
   PropagationRun, VesselPropagator, type AttitudeLaw, type ThrustControl, type Tolerances, type VesselState,
@@ -453,7 +453,14 @@ export class Simulation {
       y: v.x * axes.x.y + v.y * axes.y.y + v.z * axes.z.y,
       z: v.x * axes.x.z + v.y * axes.y.z + v.z * axes.z.z,
     });
-    const relative = { position: toEcliptic(local.position), velocity: toEcliptic(local.velocity) };
+    const position = toEcliptic(local.position);
+    // Circular speed for the home body's actual radial pull at the start point,
+    // bulge included: g = GM/r^2 - 1.5 J2 GM R^2 (3 sin^2(lat) - 1) / r^4.
+    const r = length(position);
+    const sinLat = dot(position, spinAxis(body)) / r;
+    const g = body.gm / r ** 2 - (1.5 * body.j2 * body.gm * body.j2ReferenceRadiusMeters ** 2 * (3 * sinLat ** 2 - 1)) / r ** 4;
+    const velocity = toEcliptic(local.velocity);
+    const relative = { position, velocity: scale(velocity, Math.sqrt(g * r) / length(velocity)) };
     const run = new PropagationRun({
       time: this.time,
       position: add(planet.position, relative.position),

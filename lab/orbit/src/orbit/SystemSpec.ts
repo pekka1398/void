@@ -53,6 +53,11 @@ export interface BodySpec {
    * orbit in their planet's equatorial plane. Required with an orbit.
    */
   orbitPlane?: 'ecliptic' | 'parent-equator';
+  /**
+   * Zonal J2 of the gravity field about the spin axis, felt by vessels.
+   * Absent: a point mass. The surface stays a sphere of radiusMeters.
+   */
+  gravityField?: { j2: number; referenceRadiusMeters: number };
   children: BodySpec[];
 }
 
@@ -70,6 +75,9 @@ export interface CelestialBody {
   radiusMeters: number;
   color: string;
   rotation: RotationSpec;
+  /** 0 for a point mass. */
+  j2: number;
+  j2ReferenceRadiusMeters: number;
   parentIndex: number | null;
   /** Jacobi two-body period used for step selection and display, null for the root. */
   orbitPeriodSeconds: number | null;
@@ -108,6 +116,11 @@ function assertBodySpec(spec: BodySpec, isRoot: boolean): void {
 }
 
 function assertOrbit(spec: BodySpec, isRoot: boolean): void {
+  if (spec.gravityField) {
+    const { j2, referenceRadiusMeters } = spec.gravityField;
+    if (!(j2 > 0) || !(j2 < 0.1)) throw new RangeError(`${spec.id}: J2 ${j2}`);
+    if (!(referenceRadiusMeters > 0) || !Number.isFinite(referenceRadiusMeters)) throw new RangeError(`${spec.id}: J2 radius ${referenceRadiusMeters}`);
+  }
   if (isRoot && spec.orbit) throw new RangeError(`${spec.id}: the root body cannot have an orbit`);
   if (!isRoot && !spec.orbit) throw new RangeError(`${spec.id}: a non-root body requires an orbit`);
   if ((spec.orbit !== undefined) !== (spec.orbitPlane !== undefined)) throw new RangeError(`${spec.id}: orbit and orbitPlane go together`);
@@ -183,6 +196,8 @@ export function buildSystem(spec: SystemSpec): BuiltSystem {
       gm: GRAVITATIONAL_CONSTANT * node.massKg,
       radiusMeters: node.radiusMeters,
       color: node.color,
+      j2: node.gravityField?.j2 ?? 0,
+      j2ReferenceRadiusMeters: node.gravityField?.referenceRadiusMeters ?? 0,
       // A locked rotation is resolved by the parent once the orbit is placed.
       rotation: 'kind' in node.rotation ? UNRESOLVED_ROTATION : { ...node.rotation },
       parentIndex,
