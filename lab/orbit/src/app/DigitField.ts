@@ -109,7 +109,7 @@ export class DigitField {
 const DAY = 86_400;
 
 /**
- * ddd hh:mm:ss, every digit scrollable. Typed text: "2d 3:04:05", "3:04:05",
+ * ddd hh:mm:ss; each unit is one scroll target. Typed text: "2d 3:04:05", "3:04:05",
  * "4:05", or a number with a unit: "2.5d", "3h", "10m", "30s".
  */
 export function durationFormat(min: number, max: number): DigitFormat {
@@ -122,19 +122,13 @@ export function durationFormat(min: number, max: number): DigitFormat {
       const h = Math.floor((s % DAY) / 3600);
       const m = Math.floor((s % 3600) / 60);
       const sec = s % 60;
-      const out: { text: string; place: number | null }[] = [];
-      const push = (n: number, width: number, places: number[]) => {
-        const text = String(n).padStart(width, '0');
-        for (let i = 0; i < width; i += 1) out.push({ text: text[i]!, place: places[i]! });
-      };
-      push(d, 3, [100 * DAY, 10 * DAY, DAY]);
-      out.push({ text: 'd ', place: null });
-      push(h, 2, [10 * 3600, 3600]);
-      out.push({ text: ':', place: null });
-      push(m, 2, [600, 60]);
-      out.push({ text: ':', place: null });
-      push(sec, 2, [10, 1]);
-      return out;
+      // One scroll target per unit: the wheel steps a whole day, hour, minute or second.
+      return [
+        { text: String(d).padStart(3, '0'), place: DAY }, { text: 'd ', place: null },
+        { text: String(h).padStart(2, '0'), place: 3600 }, { text: ':', place: null },
+        { text: String(m).padStart(2, '0'), place: 60 }, { text: ':', place: null },
+        { text: String(sec).padStart(2, '0'), place: 1 },
+      ];
     },
     parse(text) {
       const unit = /^(\d+(?:\.\d+)?)\s*([dhms])$/i.exec(text);
