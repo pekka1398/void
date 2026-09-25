@@ -28,7 +28,20 @@ export interface ContactBodySpec {
   massKg: number;
   friction: number;
   restitution: number;
+  /** Keep the body's orientation fixed in the planet's frame. */
+  lockRotations: boolean;
 }
+
+/** Unit quaternion, body-fixed axes. */
+export interface Quaternion { x: number; y: number; z: number; w: number }
+
+/**
+ * Extra acceleration (e.g. thrust) for a body, called once per step. Leapfrog
+ * kicks cover the half steps on both sides of a step, so this must return
+ * the average of the extra acceleration over the step just ended and the
+ * step starting; a jump (engine on or off) then lands at the step boundary.
+ */
+export type ExtraAcceleration = (body: RAPIER_NS.RigidBody, state: FrameState) => Vec3;
 
 interface TileCollider { collider: RAPIER_NS.Collider; origin: Vec3 }
 
@@ -85,16 +98,23 @@ export class ContactWorld {
     return this.tiles.size;
   }
 
-  addBody(spec: ContactBodySpec, state: FrameState): RAPIER_NS.RigidBody {
+  /**
+   * extraBefore: acceleration beyond gravity and the frame's over the half
+   * step before now (thrust already running), for the half-step velocity.
+   */
+  addBody(spec: ContactBodySpec, state: FrameState, rotation: Quaternion = { x: 0, y: 0, z: 0, w: 1 }, extraBefore: Vec3 = { x: 0, y: 0, z: 0 }): RAPIER_NS.RigidBody {
     const R = this.rapier;
     const p = this.toLocal(state.position);
-    const a = this.frame.acceleration(this.time, state.position, state.velocity);
+    const g = this.frame.acceleration(this.time, state.position, state.velocity);
+    const a = { x: g.x + extraBefore.x, y: g.y + extraBefore.y, z: g.z + extraBefore.z };
     const dt = this.options.stepSeconds;
     const body = this.world.createRigidBody(R.RigidBodyDesc.dynamic()
       .setTranslation(p.x, p.y, p.z)
       // Stored velocity is the half-step velocity v - a dt/2.
       .setLinvel(state.velocity.x - (a.x * dt) / 2, state.velocity.y - (a.y * dt) / 2, state.velocity.z - (a.z * dt) / 2)
+      .setRotation(rotation)
       .setCcdEnabled(true));
+    if (spec.lockRotations) body.lockRotations(true, false);
     const shape = spec.shape;
     const desc = shape.kind === 'box'
       ? R.ColliderDesc.cuboid(shape.halfExtents.x, shape.halfExtents.y, shape.halfExtents.z)
@@ -109,30 +129,54 @@ export class ContactWorld {
     return body;
   }
 
-  /** Body-fixed state at the current time (velocity back from the half step). */
-  state(body: RAPIER_NS.RigidBody): FrameState {
+  /**
+   * Body-fixed state at the current time (velocity back from the half step).
+   * extra: any acceleration beyond gravity and the frame's, over the coming
+   * step (thrust), which the half step back includes.
+   */
+  state(body: RAPIER_NS.RigidBody, extra: Vec3 = { x: 0, y: 0, z: 0 }): FrameState {
     if (!this.bodies.has(body)) throw new Error('ContactWorld: unknown body');
     const t = body.translation();
     const position = { x: this.origin.x + t.x, y: this.origin.y + t.y, z: this.origin.z + t.z };
     const u = body.linvel();
     const dt = this.options.stepSeconds;
     // One fixed-point pass: the Coriolis term depends on the velocity itself.
-    let a = this.frame.acceleration(this.time, position, u);
-    a = this.frame.acceleration(this.time, position, { x: u.x + (a.x * dt) / 2, y: u.y + (a.y * dt) / 2, z: u.z + (a.z * dt) / 2 });
+    const total = (v: Vec3): Vec3 => {
+      const g = this.frame.acceleration(this.time, position, v);
+      return { x: g.x + extra.x, y: g.y + extra.y, z: g.z + extra.z };
+    };
+    let a = total(u);
+    a = total({ x: u.x + (a.x * dt) / 2, y: u.y + (a.y * dt) / 2, z: u.z + (a.z * dt) / 2 });
     return { position, velocity: { x: u.x + (a.x * dt) / 2, y: u.y + (a.y * dt) / 2, z: u.z + (a.z * dt) / 2 } };
   }
 
-  step(): void {
+  removeBody(body: RAPIER_NS.RigidBody): void {
+    if (!this.bodies.delete(body)) throw new Error('ContactWorld: unknown body');
+    this.world.removeRigidBody(body);
+  }
+
+  /** Release Rapier's memory; the world is unusable afterwards. */
+  free(): void {
+    this.world.free();
+    this.bodies.clear();
+    this.tiles.clear();
+  }
+
+  step(extra?: ExtraAcceleration): void {
     const dt = this.options.stepSeconds;
     this.frame.ephemeris.extendTo(this.time + dt);
     for (const body of this.bodies) {
+      const push = extra ? extra(body, this.state(body)) : null;
+      if (push && (push.x !== 0 || push.y !== 0 || push.z !== 0)) body.wakeUp();
       if (body.isSleeping()) continue;
       const t = body.translation();
       const position = { x: this.origin.x + t.x, y: this.origin.y + t.y, z: this.origin.z + t.z };
       const u = body.linvel();
-      // Coriolis at the mid-point velocity estimate u + a dt / 2.
+      // Coriolis at the mid-point velocity estimate u + a dt / 2, thrust included.
+      const e = push ?? { x: 0, y: 0, z: 0 };
       let a = this.frame.acceleration(this.time, position, u);
-      a = this.frame.acceleration(this.time, position, { x: u.x + (a.x * dt) / 2, y: u.y + (a.y * dt) / 2, z: u.z + (a.z * dt) / 2 });
+      a = this.frame.acceleration(this.time, position, { x: u.x + ((a.x + e.x) * dt) / 2, y: u.y + ((a.y + e.y) * dt) / 2, z: u.z + ((a.z + e.z) * dt) / 2 });
+      a = { x: a.x + e.x, y: a.y + e.y, z: a.z + e.z };
       body.setLinvel({ x: u.x + a.x * dt, y: u.y + a.y * dt, z: u.z + a.z * dt }, false);
     }
     this.world.step();

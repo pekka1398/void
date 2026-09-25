@@ -541,6 +541,16 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
   const state = { position: { x: r, y: 0, z: 0 }, velocity: { x: 0, y: vc, z: 0 } };
   const law = (tangent: number, normal: number, radial: number) =>
     prop.thrustDirection({ kind: 'frenet', referenceBody: 0, tangent, normal, radial }, 0, state.position, state.velocity);
+  // Surface law: up is the local vertical; prograde follows the velocity over
+  // the rotating ground (staticSpin turns once a day about +z).
+  const w = (2 * Math.PI) / SECONDS_PER_DAY;
+  const ground = normalize({ x: state.velocity.x + w * state.position.y, y: state.velocity.y - w * state.position.x, z: state.velocity.z });
+  const up = prop.thrustDirection({ kind: 'surface', referenceBody: 0, up: 1, prograde: 0 }, 0, state.position, state.velocity);
+  const retro = prop.thrustDirection({ kind: 'surface', referenceBody: 0, up: 0, prograde: -1 }, 0, state.position, state.velocity);
+  const still = { position: state.position, velocity: { x: -w * state.position.y, y: w * state.position.x, z: 0 } };
+  check('surface attitude', distance(up, { x: 1, y: 0, z: 0 }) < 1e-15 && distance(retro, { x: -ground.x, y: -ground.y, z: -ground.z }) < 1e-12
+    && throws(() => prop.thrustDirection({ kind: 'surface', referenceBody: 0, up: 0, prograde: 1 }, 0, still.position, still.velocity)),
+    'up is the local vertical, retrograde opposes the velocity over the rotating ground, undefined at rest on the ground');
   const n = law(0, 1, 0), rOut = law(0, 0, 1);
   check('frenet directions', distance(n, { x: 0, y: 0, z: 1 }) < 1e-12 && distance(rOut, { x: 1, y: 0, z: 0 }) < 1e-12,
     'normal = r x v, radial-out points away from the body');

@@ -23,10 +23,15 @@ export interface VesselState {
  * - frenet: unit components along the trajectory's frame relative to a body:
  *   tangent = velocity relative to the body (prograde), normal = orbit normal
  *   r x v, radial = tangent x normal (radial out for a circular orbit).
+ * - surface: for flying near a rotating body, the normalised combination
+ *   up * (local vertical) + prograde * (direction of the velocity over the
+ *   ground, v - v_body - w x r). up = 1 hovers; prograde = -1 is surface
+ *   retrograde, for killing ground speed.
  */
 export type AttitudeLaw =
   | { kind: 'inertial'; direction: Vec3 }
-  | { kind: 'frenet'; referenceBody: number; tangent: number; normal: number; radial: number };
+  | { kind: 'frenet'; referenceBody: number; tangent: number; normal: number; radial: number }
+  | { kind: 'surface'; referenceBody: number; up: number; prograde: number };
 
 /** Constant for the duration of one advance call. */
 export interface ThrustControl {
@@ -60,7 +65,10 @@ export function assertThrustControl(control: ThrustControl, bodyCount: number): 
     if (Math.abs(Math.hypot(a.direction.x, a.direction.y, a.direction.z) - 1) > 1e-9) throw new RangeError('inertial attitude is not a unit vector');
   } else {
     if (!Number.isInteger(a.referenceBody) || a.referenceBody < 0 || a.referenceBody >= bodyCount) throw new RangeError(`attitude body ${a.referenceBody}`);
-    if (Math.abs(Math.hypot(a.tangent, a.normal, a.radial) - 1) > 1e-9) throw new RangeError('frenet attitude components are not a unit vector');
+    if (a.kind === 'frenet' && Math.abs(Math.hypot(a.tangent, a.normal, a.radial) - 1) > 1e-9) throw new RangeError('frenet attitude components are not a unit vector');
+    if (a.kind === 'surface' && !(Number.isFinite(a.up) && Number.isFinite(a.prograde) && Math.hypot(a.up, a.prograde) > 0)) {
+      throw new RangeError(`surface attitude components ${a.up}, ${a.prograde}`);
+    }
   }
 }
 
@@ -118,6 +126,8 @@ export class VesselPropagator {
   private readonly bodyVelocities: Float64Array;
   /** Per body: spin axis (3), then 1.5 J2 GM R^2 (0 for a point mass). */
   private readonly oblateness: Float64Array;
+  /** Per body: spin rate about its axis, rad/s. */
+  private readonly spinRates: Float64Array;
   private readonly yNext = new Float64Array(DIM);
   private readonly dyNext = new Float64Array(DIM);
   private readonly probeY = new Float64Array(DIM);
@@ -134,6 +144,7 @@ export class VesselPropagator {
     this.bodyPositions = new Float64Array(ephemeris.bodyCount * 3);
     this.bodyVelocities = new Float64Array(ephemeris.bodyCount * 3);
     this.oblateness = new Float64Array(ephemeris.bodyCount * 4);
+    this.spinRates = Float64Array.from(ephemeris.bodies, (body) => (2 * Math.PI) / body.rotation.periodSeconds);
     ephemeris.bodies.forEach((body, i) => {
       const k = spinAxis(body);
       this.oblateness.set([k.x, k.y, k.z, 1.5 * body.j2 * body.gm * body.j2ReferenceRadiusMeters ** 2], i * 4);
@@ -145,7 +156,8 @@ export class VesselPropagator {
     if (attitude.kind === 'inertial') return { ...attitude.direction };
     this.ephemeris.statesAt(t, this.bodyPositions, this.bodyVelocities);
     const out = new Float64Array(3);
-    this.frenetDirection(attitude, position.x, position.y, position.z, velocity.x, velocity.y, velocity.z, out);
+    if (attitude.kind === 'surface') this.surfaceDirection(attitude, position.x, position.y, position.z, velocity.x, velocity.y, velocity.z, out);
+    else this.frenetDirection(attitude, position.x, position.y, position.z, velocity.x, velocity.y, velocity.z, out);
     return { x: out[0]!, y: out[1]!, z: out[2]! };
   }
 
@@ -211,8 +223,8 @@ export class VesselPropagator {
 
   private evaluate(t: number, y: Float64Array, dy: Float64Array): void {
     const control = this.control;
-    const frenet = control !== null && control.attitude.kind === 'frenet';
-    if (frenet) this.ephemeris.statesAt(t, this.bodyPositions, this.bodyVelocities);
+    const relative = control !== null && control.attitude.kind !== 'inertial';
+    if (relative) this.ephemeris.statesAt(t, this.bodyPositions, this.bodyVelocities);
     else this.ephemeris.positionsAt(t, this.bodyPositions);
     const positions = this.bodyPositions;
     let ax = 0, ay = 0, az = 0;
@@ -246,6 +258,8 @@ export class VesselPropagator {
         direction[0] = control.attitude.direction.x;
         direction[1] = control.attitude.direction.y;
         direction[2] = control.attitude.direction.z;
+      } else if (control.attitude.kind === 'surface') {
+        this.surfaceDirection(control.attitude, x, yy, z, y[3]!, y[4]!, y[5]!, direction);
       } else {
         this.frenetDirection(control.attitude, x, yy, z, y[3]!, y[4]!, y[5]!, direction);
       }
@@ -283,6 +297,32 @@ export class VesselPropagator {
     out[0] = law.tangent * tx + law.normal * nx + law.radial * qx;
     out[1] = law.tangent * ty + law.normal * ny + law.radial * qy;
     out[2] = law.tangent * tz + law.normal * nz + law.radial * qz;
+  }
+
+  /** Requires bodyPositions/bodyVelocities evaluated at the same time. */
+  private surfaceDirection(
+    law: Extract<AttitudeLaw, { kind: 'surface' }>,
+    x: number, y: number, z: number, vx: number, vy: number, vz: number, out: Float64Array,
+  ): void {
+    const i = law.referenceBody;
+    const b = i * 3;
+    const rx = x - this.bodyPositions[b]!, ry = y - this.bodyPositions[b + 1]!, rz = z - this.bodyPositions[b + 2]!;
+    const rl = Math.hypot(rx, ry, rz);
+    const k0 = this.oblateness[i * 4]!, k1 = this.oblateness[i * 4 + 1]!, k2 = this.oblateness[i * 4 + 2]!;
+    const w = this.spinRates[i]!;
+    // Ground velocity: v - v_body - (w k) x r.
+    const gx = vx - this.bodyVelocities[b]! - w * (k1 * rz - k2 * ry);
+    const gy = vy - this.bodyVelocities[b + 1]! - w * (k2 * rx - k0 * rz);
+    const gz = vz - this.bodyVelocities[b + 2]! - w * (k0 * ry - k1 * rx);
+    const gl = Math.hypot(gx, gy, gz);
+    if (law.prograde !== 0 && !(gl > 0)) throw new Error('surface attitude undefined: no velocity over the ground');
+    const px = law.prograde === 0 ? 0 : (law.prograde * gx) / gl;
+    const py = law.prograde === 0 ? 0 : (law.prograde * gy) / gl;
+    const pz = law.prograde === 0 ? 0 : (law.prograde * gz) / gl;
+    const dx = (law.up * rx) / rl + px, dy = (law.up * ry) / rl + py, dz = (law.up * rz) / rl + pz;
+    const dl = Math.hypot(dx, dy, dz);
+    if (!(dl > 0)) throw new Error('surface attitude undefined: up and ground velocity cancel');
+    out[0] = dx / dl; out[1] = dy / dl; out[2] = dz / dl;
   }
 
   private errorNorm(): number {

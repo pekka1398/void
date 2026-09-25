@@ -7,6 +7,7 @@ cd lab/landing
 npm ci
 npm run check      # headless checks
 npm run typecheck
+npm run build      # headless core; the page arrives in P4
 ```
 
 ## Contracts with the other labs
@@ -56,5 +57,11 @@ Not modelled: the frame's fictitious torques on spinning bodies (of order ω, 6e
 |---|---|---|
 | P1 | Lab setup, terrain contract, collision tiles | done |
 | P2 | Rapier contacts in the rotating frame; drift and rest checks | done |
-| P3 | Hand-off between inertial free flight and contacts; landed state; warp | next |
+| P3 | Hand-off between inertial free flight and contacts; landed state; warp | done |
 | P4 | Page: rendering, controls, camera frames, terrain-aware prediction | |
+
+## Flight and landing (`src/vessel/Lander.ts`)
+
+- A lander has three modes: inertial free flight with the orbit lab's propagator, rotating-frame Rapier contacts near the terrain, and a landed position pinned to the surface during time warp. The contact band has separate entry and exit heights to avoid repeated switching.
+- Thrust uses the same surface-relative direction law in both physics engines. Contact integration accounts for fuel lost during each step and carries the half-step thrust across mode changes.
+- The P3 check launches from a slope, crosses from contact to free flight and back, then settles on the ground. While clear of terrain, its trajectory stays within 5 mm of an independent run of the orbit lab's integrator. A separate controlled landing reaches 13.6 km and touches down below 1 m/s. A landed craft stays fixed on the surface through one day of time warp.

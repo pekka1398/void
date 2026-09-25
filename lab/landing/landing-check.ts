@@ -1,7 +1,8 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import {
-  buildSystem, distance, Ephemeris, PropagationRun, suggestedStepSeconds, VesselPropagator, type Vec3,
+  buildSystem, distance, Ephemeris, PropagationRun, suggestedStepSeconds, VesselPropagator, type ThrustControl, type Vec3,
 } from './src/orbitCore';
+import { Lander, type LanderControl, type LanderOptions, type LanderSpec } from './src/vessel/Lander';
 import { ContactWorld, type ContactWorldOptions } from './src/physics/ContactWorld';
 import { PlanetFrame, type FrameState } from './src/physics/PlanetFrame';
 import type { Terrain } from './src/terrain/Surface';
@@ -225,7 +226,7 @@ const CONTACT_OPTIONS: ContactWorldOptions = {
   const times = [30, 60, 90, 120, 150];
   const reference = inertialReference(env, start, times);
   const world = new ContactWorld(RAPIER, env.frame, env.terrain, CONTACT_OPTIONS, 0, start.position);
-  const body = world.addBody({ shape: { kind: 'ball', radius: 1 }, massKg: 1000, friction: 0.5, restitution: 0 }, start);
+  const body = world.addBody({ shape: { kind: 'ball', radius: 1 }, massKg: 1000, friction: 0.5, restitution: 0, lockRotations: false }, start);
   let worstP = 0, worstV = 0;
   times.forEach((target, i) => {
     while (world.time < target - 1e-9) world.step();
@@ -256,7 +257,7 @@ function clearance(terrain: Terrain, p: Vec3): number {
   const env = plainPebble();
   const at = ground(env.terrain, { x: 1, y: 0.02, z: 0 }, 2);
   const world = new ContactWorld(RAPIER, env.frame, env.terrain, CONTACT_OPTIONS, 0, at);
-  const box = world.addBody({ shape: { kind: 'box', halfExtents: { x: 1, y: 1, z: 1 } }, massKg: 5000, friction: 0.8, restitution: 0 }, { position: at, velocity: { x: 0, y: 0, z: 0 } });
+  const box = world.addBody({ shape: { kind: 'box', halfExtents: { x: 1, y: 1, z: 1 } }, massKg: 5000, friction: 0.8, restitution: 0, lockRotations: false }, { position: at, velocity: { x: 0, y: 0, z: 0 } });
   while (world.time < 30) world.step();
   const settled = world.state(box).position;
   let lowest = Infinity;
@@ -277,7 +278,7 @@ function clearance(terrain: Terrain, p: Vec3): number {
   const east = { x: -up.y, y: up.x, z: 0 };
   const el = Math.hypot(east.x, east.y);
   const world = new ContactWorld(RAPIER, env.frame, env.terrain, CONTACT_OPTIONS, 0, at);
-  const ball = world.addBody({ shape: { kind: 'ball', radius: 1 }, massKg: 500, friction: 0.6, restitution: 0.2 },
+  const ball = world.addBody({ shape: { kind: 'ball', radius: 1 }, massKg: 500, friction: 0.6, restitution: 0.2, lockRotations: false },
     { position: at, velocity: { x: (east.x / el) * 30, y: (east.y / el) * 30, z: 0 } });
   let lowest = Infinity;
   while (world.time < 120) {
@@ -294,13 +295,104 @@ function clearance(terrain: Terrain, p: Vec3): number {
   const env = plainPebble();
   const at = ground(env.terrain, { x: 0, y: 1, z: 0.1 }, 50);
   const world = new ContactWorld(RAPIER, env.frame, env.terrain, CONTACT_OPTIONS, 0, at);
-  const ball = world.addBody({ shape: { kind: 'ball', radius: 1 }, massKg: 500, friction: 0.6, restitution: 0.2 }, { position: at, velocity: { x: 3, y: -2, z: 1 } });
+  const ball = world.addBody({ shape: { kind: 'ball', radius: 1 }, massKg: 500, friction: 0.6, restitution: 0.2, lockRotations: false }, { position: at, velocity: { x: 3, y: -2, z: 1 } });
   for (let i = 0; i < 100; i += 1) world.step();
   const before = world.state(ball);
   world.recenter({ x: world.origin.x + 700, y: world.origin.y - 300, z: world.origin.z + 200 });
   const after = world.state(ball);
   const dp = distance(before.position, after.position), dv = distance(before.velocity, after.velocity);
   check('floating origin move', dp < 1e-3 && dv < 1e-9, `moving the origin 800 m changes the state by ${fmt(dp)} m, ${fmt(dv)} m/s (float32 rounding)`);
+}
+
+// === P3: hand-off between free flight and contacts ==================================
+const LANDER_SPEC: LanderSpec = {
+  thrustNewtons: 20e3, specificImpulseSeconds: 300, dryMassKg: 1000, fuelMassKg: 1000,
+  halfExtents: { x: 1.5, y: 1, z: 1.5 }, friction: 0.8,
+};
+const LANDER_OPTIONS: LanderOptions = {
+  contact: CONTACT_OPTIONS, tolerances: FRAME_TOLERANCES,
+  bandEnterMeters: 200, bandExitMeters: 400, landedSpeed: 0.05, landedSeconds: 1,
+};
+const LAUNCH_SITE = { x: 0.8, y: 0.55, z: 0.25 };
+const UP: LanderControl = { throttle: 1, up: 1, prograde: 0 };
+const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
+
+{
+  // A 10 km hop from the ground: contact -> flight -> contact, against the orbit
+  // lab's integrator flying the same burn and coast with no terrain at all.
+  const env = plainPebble();
+  const lander = Lander.landed(RAPIER, env.ephemeris, 0, env.terrain, LANDER_SPEC, LANDER_OPTIONS, 0, LAUNCH_SITE);
+  const start = env.frame.toInertial(0, lander.bodyFixedState());
+  const run = new PropagationRun({ time: 0, position: start.position, velocity: start.velocity, massKg: lander.massKg });
+  const propagator = new VesselPropagator(env.ephemeris, FRAME_TOLERANCES);
+  const thrust: ThrustControl = {
+    thrustNewtons: LANDER_SPEC.thrustNewtons, exhaustVelocity: lander.exhaustVelocity, minimumMassKg: LANDER_SPEC.dryMassKg,
+    attitude: { kind: 'surface', referenceBody: 0, up: 1, prograde: 0 },
+  };
+  propagator.advance(run, 20, 1e7, null, thrust);
+  lander.advance(20, UP);
+  let worst = 0, worstAt = 0, highest = 0, compared = 0;
+  const massError = Math.abs(lander.massKg - run.state.massKg);
+  while (lander.mode !== 'landed' && lander.time < 600) {
+    lander.advance(1, COAST);
+    propagator.advance(run, lander.time, 1e7, null, null);
+    highest = Math.max(highest, lander.clearance());
+    // Compare while the lander is clear of the ground (the reference has none).
+    if (lander.clearance() > 20) {
+      const reference = env.frame.toBodyFixed(lander.time, { position: run.state.position, velocity: run.state.velocity });
+      const e = distance(lander.bodyFixedState().position, reference.position);
+      if (e > worst) { worst = e; worstAt = lander.time; }
+      compared += 1;
+    }
+  }
+  const sequence = ['landed', ...lander.modeChanges.map((c) => c.to)].join(' -> ');
+  check('hand-off consistency', worst < 0.1 && massError < 1e-6 && sequence === 'landed -> contact -> flight -> contact -> landed',
+    `${sequence}; top ${(highest / 1e3).toFixed(2)} km above the terrain; over ${compared} samples the lander stays within ${fmt(worst)} m of the orbit lab's integration (worst at T+${worstAt.toFixed(0)} s); fuel differs by ${fmt(massError)} kg`);
+
+  // Landed: pinned in the planet's frame through a day of warp.
+  const pinned = lander.bodyFixedState().position;
+  const inertialBefore = lander.inertialState().position;
+  lander.advance(86_400, COAST);
+  const moved = distance(lander.bodyFixedState().position, pinned);
+  const swept = distance(lander.inertialState().position, inertialBefore);
+  check('landed under warp', lander.mode === 'landed' && moved === 0 && swept > 1000,
+    `a day in one step: body-fixed position unchanged, carried ${(swept / 1e3).toFixed(1)} km by the planet's spin in the inertial frame`);
+}
+
+{
+  // Hop and land: a burn to about 10 km, then a surface-retrograde landing burn.
+  const env = plainPebble();
+  const lander = Lander.landed(RAPIER, env.ephemeris, 0, env.terrain, LANDER_SPEC, LANDER_OPTIONS, 0, LAUNCH_SITE);
+  const site = lander.bodyFixedState().position;
+  const g = 1.6;
+  lander.advance(20, UP);
+  let peak = 0, touchdownSpeed = 0, lastSpeed = 0;
+  while (lander.mode !== 'landed' && lander.time < 1200) {
+    const s = lander.bodyFixedState();
+    const r = Math.hypot(s.position.x, s.position.y, s.position.z);
+    const vUp = (s.velocity.x * s.position.x + s.velocity.y * s.position.y + s.velocity.z * s.position.z) / r;
+    const speed = Math.hypot(s.velocity.x, s.velocity.y, s.velocity.z);
+    const h = lander.clearance() - LANDER_SPEC.halfExtents.y;
+    peak = Math.max(peak, h);
+    const accel = LANDER_SPEC.thrustNewtons / lander.massKg;
+    let control = COAST;
+    if (vUp < 0 && h > 30) {
+      // Burn surface-retrograde once stopping takes most of the remaining height.
+      if (speed * speed / (2 * (accel - g)) > 0.7 * h) control = { throttle: 1, up: 0, prograde: -1 };
+    } else if (vUp < 0 || h <= 30) {
+      // Final descent: hold 1.5 m/s down, cut the engine at touchdown.
+      const want = h > 1.5 ? -1.5 : 0;
+      const throttle = h > 0.2 ? Math.min(1, Math.max(0, (lander.massKg * (g + 2 * (want - vUp))) / LANDER_SPEC.thrustNewtons)) : 0;
+      control = { throttle, up: 1, prograde: 0 };
+    }
+    lastSpeed = speed;
+    if (h < 0.5) touchdownSpeed = Math.max(touchdownSpeed, speed);
+    lander.advance(0.1, control);
+  }
+  const drift = distance(lander.bodyFixedState().position, site);
+  const sequence = ['landed', ...lander.modeChanges.map((c) => c.to)].join(' -> ');
+  check('hop and land', lander.mode === 'landed' && peak > 9000 && touchdownSpeed < 3 && lander.fuelKg > 0,
+    `${sequence}; peak ${(peak / 1e3).toFixed(1)} km, touchdown at ${touchdownSpeed.toFixed(2)} m/s, landed ${(drift / 1e3).toFixed(2)} km from the launch site after ${lander.time.toFixed(0)} s, ${lander.fuelKg.toFixed(0)} kg fuel left (last speed ${lastSpeed.toFixed(2)} m/s)`);
 }
 
 if (failures.length > 0) {
