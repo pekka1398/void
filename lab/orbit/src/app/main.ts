@@ -126,7 +126,7 @@ const panel = new Panel(document.body, sim.system.bodies, { frame, focus, trailS
     const target = next.startTime - WARP_LEAD_SECONDS;
     if (target > sim.time) { warpTarget = target; paused = false; }
   },
-  planShift(seconds) { editSelected((spec) => ({ ...spec, startTime: spec.startTime + seconds })); },
+  planStart(time) { editSelected((spec) => ({ ...spec, startTime: time })); },
   planSnap(kind) {
     const placement = sim.placeManeuverAtApsis(requireSelected(), kind);
     planMessage = placement.ok ? null : { text: placement.reason, until: performance.now() + PLAN_MESSAGE_SECONDS * 1000 };
@@ -436,7 +436,7 @@ function updatePlanPanel(nowMs: number): void {
     }
     if (planMessage && nowMs < planMessage.until) summary.push(`✕ ${planMessage.text}`);
     editor = {
-      index: i, referenceBody: spec.referenceBody, prograde: spec.prograde, normal: spec.normal, radial: spec.radial,
+      index: i, referenceBody: spec.referenceBody, startTime: spec.startTime, prograde: spec.prograde, normal: spec.normal, radial: spec.radial,
       summary: summary.join('\n'), ok: status.ok, editable: !(executing && i === 0),
     };
   }

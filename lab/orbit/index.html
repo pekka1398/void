@@ -62,21 +62,18 @@
       .panel .plan-list .empty { color: #8892a6; cursor: default; }
       .panel .plan-buttons, .panel .snap { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
       .panel .snap { grid-template-columns: repeat(2, 1fr); }
-      .panel .plan-buttons button, .panel .snap button, .panel .nudge button { margin: 3px 0 0; padding: 2px 0; }
-      .panel .nudge { display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px; margin: 4px 0 3px; }
+      .panel .plan-buttons button, .panel .snap button { margin: 3px 0 0; padding: 2px 0; }
       .panel button:disabled, .panel input:disabled, .panel select:disabled { opacity: 0.4; cursor: default; }
-      .panel label.dv span { display: flex; align-items: center; gap: 3px; }
-      .panel label.dv button { width: 22px; margin: 0; padding: 0; }
-      .panel input[type=number] {
-        width: 82px; background: #141925; color: #dfe6f3; border: 1px solid #333c52; border-radius: 3px; font: inherit; text-align: right;
-      }
       .panel pre.plan-summary.invalid { color: #ff8a8a; }
       .marker.ring { margin: -7px 0 0 -7px; }
       .marker.ring i { width: 10px; height: 10px; background: transparent !important; border: 2px solid #ffc857; box-shadow: none; }
       .marker.ring span { color: #ffd98a; }
-      .panel .coast-nudge { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; }
-      .panel .coast-nudge button { margin: 0 0 2px; padding: 2px 0; }
-      .panel .coast-text { color: #8892a6; text-align: right; }
+      .panel .digits { padding: 0 3px; background: #141925; border: 1px solid #333c52; border-radius: 3px; cursor: text; white-space: pre; }
+      .panel .digits b { font-weight: 400; cursor: ns-resize; }
+      .panel .digits b:hover { background: #ffc857; color: #1a1406; }
+      .panel .digits i { font-style: normal; color: #8892a6; }
+      .panel .digits.disabled { opacity: 0.4; cursor: default; }
+      .panel .digits input { background: transparent; color: #fff; border: 0; font: inherit; padding: 0; outline: none; }
       kbd { padding: 0 4px; border: 1px solid #3a4256; border-radius: 3px; color: #9fb0d0; font-size: 11px; }
       .panic {
         position: fixed; inset: 12px; z-index: 9999; overflow: auto; margin: 0; padding: 20px;

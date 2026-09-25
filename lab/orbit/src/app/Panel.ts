@@ -1,6 +1,6 @@
 import type { AttitudeMode, CelestialBody, FrameSpec } from '../orbit';
 import { SECONDS_PER_DAY } from '../orbit';
-import { formatDuration } from './Format';
+import { decimalFormat, DigitField, durationFormat } from './DigitField';
 import type { Focus } from './SceneView';
 import type { SystemPresetId } from './SystemPresets';
 
@@ -18,18 +18,10 @@ export const PREDICTION_SPANS: readonly [string, number][] = [
   ['30 d', 30 * SECONDS_PER_DAY], ['90 d', 90 * SECONDS_PER_DAY], ['1 y', 365.25 * SECONDS_PER_DAY],
 ];
 
-const COAST_NUDGES: readonly [string, number][] = [
-  ['−1d', -SECONDS_PER_DAY], ['−1h', -HOUR], ['−10m', -600], ['−1m', -60],
-  ['+1m', 60], ['+10m', 600], ['+1h', HOUR], ['+1d', SECONDS_PER_DAY],
-];
 /** Shortest coast the panel allows. */
 const MIN_COAST_SECONDS = 60;
-const COAST_WHEEL_SECONDS = 600;
-const TIME_NUDGES: readonly [string, number][] = [
-  ['−1d', -SECONDS_PER_DAY], ['−1h', -HOUR], ['−10m', -600], ['−1m', -60], ['−10s', -10], ['−1s', -1],
-  ['+1s', 1], ['+10s', 10], ['+1m', 60], ['+10m', 600], ['+1h', HOUR], ['+1d', SECONDS_PER_DAY],
-];
-const DV_STEPS = [0.01, 0.1, 1, 10, 100, 1000] as const;
+/** The digit fields reach 999 days. */
+const MAX_DAYS_SECONDS = 999 * SECONDS_PER_DAY + 86_399;
 export type DeltaVComponent = 'prograde' | 'normal' | 'radial';
 const DV_COMPONENTS: readonly [DeltaVComponent, string][] = [['prograde', 'Prograde'], ['normal', 'Normal'], ['radial', 'Radial']];
 
@@ -40,6 +32,8 @@ export interface PlanRow { text: string; ok: boolean }
 export interface BurnEditor {
   index: number;
   referenceBody: number;
+  /** Absolute mission time, s. */
+  startTime: number;
   prograde: number;
   normal: number;
   radial: number;
@@ -70,7 +64,8 @@ export interface PanelHandlers {
   planSelect(index: number): void;
   planRemove(): void;
   planWarp(): void;
-  planShift(seconds: number): void;
+  /** Absolute mission time of the selected burn's start. */
+  planStart(time: number): void;
   planSnap(kind: 'periapsis' | 'apoapsis'): void;
   planReference(body: number): void;
   planDeltaV(component: DeltaVComponent, value: number): void;
@@ -99,13 +94,11 @@ export class Panel {
   private readonly planEditor: HTMLDivElement;
   private readonly planSummary: HTMLPreElement;
   private readonly burnReference: HTMLSelectElement;
-  private readonly dvInputs: Map<DeltaVComponent, HTMLInputElement> = new Map();
+  private readonly dvFields: Map<DeltaVComponent, DigitField> = new Map();
+  private readonly startField: DigitField;
+  private readonly coastField: DigitField;
   private readonly removeButton: HTMLButtonElement;
   private readonly warpButton: HTMLButtonElement;
-  private dvStep = 10;
-  private coastInput!: HTMLInputElement;
-  private coastText!: HTMLDivElement;
-  private coastSeconds = 0;
   private planListHtml = '';
 
   constructor(
@@ -149,26 +142,22 @@ export class Panel {
       <label>Prediction <select data-k="horizon">${spanOptions(PREDICTION_SPANS, initial.predictionSpan)}</select></label>
       <div class="section">FLIGHT PLAN</div>
       <label>Target <select data-k="plan-target"><option value="none">None</option>${bodyOptions}</select></label>
-      <label>Coast after last burn <span><input type="number" step="any" min="0" data-k="plan-coast"> d</span></label>
-      <div class="coast-nudge">${COAST_NUDGES.map(([label, s]) => `<button data-coast="${s}">${label}</button>`).join('')}</div>
-      <div class="coast-text"></div>
+      <label>Coast after last burn <span data-k="plan-coast"></span></label>
       <div class="plan-list"></div>
       <div class="plan-buttons">
         <button data-k="plan-add">+ Burn</button><button data-k="plan-remove">Delete</button><button data-k="plan-warp">Warp to burn</button>
       </div>
       <div class="plan-editor">
         <label>Reference <select data-k="burn-ref">${bodyOptions}</select></label>
-        <div class="nudge">${TIME_NUDGES.map(([label, s]) => `<button data-shift="${s}">${label}</button>`).join('')}</div>
+        <label>Start T+ <span data-k="burn-start"></span></label>
         <div class="snap"><button data-snap="periapsis">@ next Pe</button><button data-snap="apoapsis">@ next Ap</button></div>
-        ${DV_COMPONENTS.map(([c, label]) => `<label class="dv">${label}
-          <span><button data-dv="${c}" data-sign="-1">−</button><input type="number" step="10" data-dv="${c}"><button data-dv="${c}" data-sign="1">+</button> m/s</span></label>`).join('')}
-        <label>Δv step <select data-k="dv-step">${DV_STEPS.map((v) => `<option value="${v}"${v === 10 ? ' selected' : ''}>${v} m/s</option>`).join('')}</select></label>
+        ${DV_COMPONENTS.map(([c, label]) => `<label>${label} <span><span data-dv="${c}"></span> m/s</span></label>`).join('')}
         <pre class="plan-summary"></pre>
       </div>
       <div class="help">
         <kbd>Space</kbd> pause · <kbd>,</kbd> <kbd>.</kbd> warp · <kbd>Tab</kbd> next focus<br>
         <kbd>Shift</kbd>/<kbd>Ctrl</kbd> throttle · <kbd>Z</kbd> full · <kbd>X</kbd> cut · <kbd>1</kbd>–<kbd>7</kbd> attitude<br>
-        Wheel over a Δv field steps it; planned burns fly at full thrust.<br>
+        Wheel over a digit of a plan field steps that digit; click the field to type.<br>
         Drag to orbit the camera, wheel to zoom, click a label to focus it.
       </div>`;
     root.append(this.element);
@@ -219,58 +208,20 @@ export class Panel {
     const targetSelect = q<HTMLSelectElement>('plan-target');
     targetSelect.value = initial.planTarget === null ? 'none' : String(initial.planTarget);
     targetSelect.addEventListener('change', () => handlers.planTarget(targetSelect.value === 'none' ? null : Number(targetSelect.value)));
-    this.coastInput = q('plan-coast');
-    this.coastText = this.element.querySelector('.coast-text')!;
-    const setCoast = (seconds: number) => {
-      this.showCoast(Math.max(MIN_COAST_SECONDS, seconds));
-      handlers.planCoast(this.coastSeconds);
-    };
-    this.coastInput.addEventListener('change', () => {
-      const days = Number(this.coastInput.value);
-      // An unparsable entry is a typing slip: show the current value again.
-      if (this.coastInput.value.trim() === '' || !Number.isFinite(days)) { this.showCoast(this.coastSeconds); return; }
-      setCoast(days * SECONDS_PER_DAY);
-    });
-    this.coastInput.addEventListener('wheel', (e) => {
-      e.preventDefault();
-      setCoast(this.coastSeconds + (e.deltaY < 0 ? 1 : -1) * COAST_WHEEL_SECONDS);
-    }, { passive: false });
-    for (const button of this.element.querySelectorAll<HTMLButtonElement>('[data-coast]')) {
-      button.addEventListener('click', () => setCoast(this.coastSeconds + Number(button.dataset.coast)));
-    }
-    this.showCoast(initial.planCoast);
+    this.coastField = new DigitField(durationFormat(MIN_COAST_SECONDS, MAX_DAYS_SECONDS), (v) => handlers.planCoast(v));
+    q('plan-coast').append(this.coastField.element);
+    this.coastField.set(initial.planCoast);
+    this.startField = new DigitField(durationFormat(0, MAX_DAYS_SECONDS), (v) => handlers.planStart(v));
+    q('burn-start').append(this.startField.element);
     this.burnReference.addEventListener('change', () => handlers.planReference(Number(this.burnReference.value)));
-    for (const button of this.planEditor.querySelectorAll<HTMLButtonElement>('[data-shift]')) {
-      button.addEventListener('click', () => handlers.planShift(Number(button.dataset.shift)));
-    }
     for (const button of this.planEditor.querySelectorAll<HTMLButtonElement>('[data-snap]')) {
       button.addEventListener('click', () => handlers.planSnap(button.dataset.snap as 'periapsis' | 'apoapsis'));
     }
-    for (const input of this.planEditor.querySelectorAll<HTMLInputElement>('input[data-dv]')) {
-      const component = input.dataset.dv as DeltaVComponent;
-      this.dvInputs.set(component, input);
-      input.addEventListener('change', () => {
-        const value = Number(input.value);
-        // An unparsable entry is a typing slip, not a plan: show the stored value again.
-        if (input.value.trim() === '' || !Number.isFinite(value)) { input.blur(); return; }
-        handlers.planDeltaV(component, value);
-      });
-      input.addEventListener('wheel', (e) => {
-        e.preventDefault();
-        handlers.planDeltaV(component, roundToStep(Number(input.value) + (e.deltaY < 0 ? 1 : -1) * this.dvStep, this.dvStep));
-      }, { passive: false });
+    for (const [component] of DV_COMPONENTS) {
+      const field = new DigitField(decimalFormat(5, 2), (v) => handlers.planDeltaV(component, v));
+      this.planEditor.querySelector(`[data-dv="${component}"]`)!.append(field.element);
+      this.dvFields.set(component, field);
     }
-    for (const button of this.planEditor.querySelectorAll<HTMLButtonElement>('button[data-dv]')) {
-      const component = button.dataset.dv as DeltaVComponent;
-      const input = this.dvInputs.get(component)!;
-      button.addEventListener('click', () => {
-        handlers.planDeltaV(component, roundToStep(Number(input.value) + Number(button.dataset.sign) * this.dvStep, this.dvStep));
-      });
-    }
-    q<HTMLSelectElement>('dv-step').addEventListener('change', (e) => {
-      this.dvStep = Number((e.target as HTMLSelectElement).value);
-      for (const input of this.dvInputs.values()) input.step = String(this.dvStep);
-    });
     this.showFrame(initial.frame);
     this.showFocus(initial.focus);
 
@@ -314,12 +265,6 @@ export class Panel {
     for (const [m, button] of this.attitudeButtons) button.classList.toggle('active', m === mode);
   }
 
-  private showCoast(seconds: number): void {
-    this.coastSeconds = seconds;
-    this.coastInput.value = String(Number((seconds / SECONDS_PER_DAY).toFixed(5)));
-    this.coastText.textContent = `= ${formatDuration(seconds)} after the last burn`;
-  }
-
   /** selected indexes rows; editor is null when nothing is selected. */
   showPlan(rows: PlanRow[], selected: number | null, editor: BurnEditor | null, canWarp: boolean): void {
     const html = rows.length === 0
@@ -333,12 +278,15 @@ export class Panel {
     this.warpButton.disabled = !canWarp;
     this.planEditor.style.display = editor ? '' : 'none';
     if (!editor) return;
-    for (const control of this.planEditor.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select')) {
-      if (control.dataset.k !== 'dv-step') control.disabled = !editor.editable;
+    for (const control of this.planEditor.querySelectorAll<HTMLButtonElement | HTMLSelectElement>('button, select')) {
+      control.disabled = !editor.editable;
     }
     if (document.activeElement !== this.burnReference) this.burnReference.value = String(editor.referenceBody);
-    for (const [component, input] of this.dvInputs) {
-      if (document.activeElement !== input) input.value = String(editor[component]);
+    this.startField.setEnabled(editor.editable);
+    this.startField.set(editor.startTime);
+    for (const [component, field] of this.dvFields) {
+      field.setEnabled(editor.editable);
+      field.set(editor[component]);
     }
     this.planSummary.textContent = editor.summary;
     this.planSummary.classList.toggle('invalid', !editor.ok);
@@ -369,12 +317,6 @@ export class Panel {
     bRow.style.display = kind === 'two-body-rotating' ? '' : 'none';
     this.element.querySelector('[data-k="a-label"]')!.textContent = kind === 'two-body-rotating' ? 'Primary' : 'Body';
   }
-}
-
-function roundToStep(value: number, step: number): number {
-  const rounded = Math.round(value / step) * step;
-  // Keep 0.1-steps free of binary fractions like 0.30000000000000004.
-  return Number(rounded.toFixed(Math.max(0, -Math.floor(Math.log10(step)))));
 }
 
 function escapeHtml(text: string): string {
