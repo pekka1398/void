@@ -28,11 +28,33 @@ npm run typecheck
 - Shared edges are computed identically from either side. Neighbouring tiles, including three faces meeting at a cube corner, share every edge vertex to within float32 rounding (under 20 µm).
 - `tilesAround(point, reach)` returns every tile touching the surface within the reach.
 
+## Contacts in the rotating frame (`src/physics/`)
+
+- `PlanetFrame`: the planet's body-fixed frame, with its origin at the centre, z along the spin axis and x at the prime meridian. It converts states to and from the orbit lab's barycentric inertial frame: r = Rᵀ(p − c) and v = Rᵀ(u − c′) − ω×r. It also gives the acceleration of a free particle in this frame:
+  - the planet's gravity, including J2;
+  - the tidal part of other bodies' gravity, since the frame's origin falls freely with the planet;
+  - centrifugal −ω×(ω×r) and Coriolis −2ω×v. With a constant spin there is no Euler term.
+- `ContactWorld`: Rapier rigid bodies in that frame.
+  - **Floating origin:** Rapier's float32 coordinates are offsets from a float64 origin, which follows the bodies.
+  - **Tile streaming:** collision tiles load around bodies near the ground, with hysteresis.
+  - **Forces:** Rapier's gravity is off. Each step kicks velocities by `PlanetFrame.acceleration`, then Rapier resolves contacts and moves bodies.
+  - **Accuracy:** the velocity Rapier holds is treated as the half-step velocity (bodies enter with v − a dt/2 and are read as u + a dt/2), which makes Rapier's first-order kick-drift the second-order leapfrog.
+
+Measured by `npm run check`:
+
+- The rotating-frame equations, integrated with fine RK4 on a 150 s hop, match the orbit lab's inertial integration of the same hop to 5e-8 m. The test planet has an exaggerated J2 of 0.01 and a moon, so every term is exercised.
+- Rapier free flight at 60 Hz stays within 7 mm and 1e-4 m/s of the same reference over 150 s. Plain kick-drift would be about 2 m off.
+- A box set down on the equator, which moves at 50 m/s, stays where it came to rest. It is at rest in the rotating frame, so Rapier puts it to sleep.
+- A ball launched at 30 m/s rolls and bounces 2.3 km across 67 streamed tiles without sinking into the ground.
+- Moving the floating origin 800 m changes a state by 2e-5 m (float32 rounding).
+
+Not modelled: the frame's fictitious torques on spinning bodies (of order ω, 6e-4 rad/s here).
+
 ## Status
 
 | Phase | Scope | State |
 |---|---|---|
 | P1 | Lab setup, terrain contract, collision tiles | done |
-| P2 | Rapier contacts in the rotating frame; drift and rest checks | next |
-| P3 | Hand-off between inertial free flight and contacts; landed state; warp | |
+| P2 | Rapier contacts in the rotating frame; drift and rest checks | done |
+| P3 | Hand-off between inertial free flight and contacts; landed state; warp | next |
 | P4 | Page: rendering, controls, camera frames, terrain-aware prediction | |
