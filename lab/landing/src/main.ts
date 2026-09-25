@@ -142,7 +142,7 @@ let dragging = false;
 let lastX = 0, lastY = 0;
 canvas.addEventListener('pointerdown', (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId); });
 canvas.addEventListener('pointerup', () => { dragging = false; });
-canvas.addEventListener('pointermove', (e) => { if (!dragging) return; azimuth += (e.clientX - lastX) * 0.006; elevation = Math.max(-1.3, Math.min(1.3, elevation + (e.clientY - lastY) * 0.006)); lastX = e.clientX; lastY = e.clientY; });
+canvas.addEventListener('pointermove', (e) => { if (!dragging) return; azimuth -= (e.clientX - lastX) * 0.006; elevation = Math.max(-1.3, Math.min(1.3, elevation - (e.clientY - lastY) * 0.006)); lastX = e.clientX; lastY = e.clientY; });
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); distance = Math.max(10, Math.min(300_000, distance * Math.exp(e.deltaY * 0.001))); }, { passive: false });
 let engineArmed = false;
 let throttlePercent = Number(throttleInput.value);
