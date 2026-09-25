@@ -26,6 +26,7 @@
         padding: 10px 12px; background: rgba(8, 10, 16, 0.88); border: 1px solid #2a3040; border-radius: 6px;
         color: #cfd6e4; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
       }
+      .panel.right { left: auto; right: 12px; width: 300px; }
       .panel .title { font-weight: 700; letter-spacing: 0.12em; color: #fff; margin-bottom: 4px; }
       .panel .title small { font-weight: 400; letter-spacing: 0; color: #8892a6; }
       .panel label { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 3px 0; }
@@ -39,6 +40,19 @@
       .panel pre { margin: 6px 0; white-space: pre-wrap; color: #e6ecf6; }
       .panel pre.status { color: #fff; }
       .panel .help { color: #8892a6; margin-top: 6px; }
+      .panel .section { margin: 10px 0 4px; color: #8892a6; letter-spacing: 0.12em; border-top: 1px solid #2a3040; padding-top: 6px; }
+      .panel .throttle { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+      .panel .throttle .bar { flex: 1; height: 8px; background: #141925; border: 1px solid #333c52; border-radius: 2px; overflow: hidden; }
+      .panel .throttle b { display: block; height: 100%; width: 0; background: #8a7a6a; }
+      .panel .throttle b.burning { background: #ff9a3c; }
+      .panel .throttle span { width: 36px; text-align: right; }
+      .panel .attitude { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; margin: 4px 0; }
+      .panel .attitude button { margin: 0; padding: 2px 0; }
+      .panel .attitude button.active { background: #2b4a6b; border-color: #4fc8ff; color: #fff; }
+      .marker.event i { width: 6px; height: 6px; }
+      .marker.event span { color: #9fdcff; }
+      .marker.impact i { background: #ff5a5a !important; }
+      .marker.impact span { color: #ff8a8a; }
       kbd { padding: 0 4px; border: 1px solid #3a4256; border-radius: 3px; color: #9fb0d0; font-size: 11px; }
       .panic {
         position: fixed; inset: 12px; z-index: 9999; overflow: auto; margin: 0; padding: 20px;

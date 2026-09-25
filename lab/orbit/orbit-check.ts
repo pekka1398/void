@@ -1,6 +1,7 @@
 import { SYSTEM_PRESETS } from './src/app/SystemPresets';
 import {
-  DEGREES, FrameEvaluator, Simulation, bodyOrientation, cross, dot, toFrame, Dopri5, Ephemeris, GRAVITATIONAL_CONSTANT, PropagationRun, SECONDS_PER_DAY,
+  DEGREES, FrameEvaluator, STANDARD_GRAVITY, Simulation, bodyOrientation, cross, dot, findApsides, normalize, toFrame,
+  type ThrustControl, Dopri5, Ephemeris, GRAVITATIONAL_CONSTANT, PropagationRun, SECONDS_PER_DAY,
   SECONDS_PER_JULIAN_YEAR, Trajectory, VesselPropagator, buildSystem, distance, length, orbitalPeriodSeconds,
   osculatingOrbit, solveKeplerElliptic, stateFromElements, sub, suggestedStepSeconds,
   type BodySpec, type EllipticElements, type SystemSpec,
@@ -20,6 +21,7 @@ const fmt = (x: number) => x.toExponential(2);
 
 const STEPS_PER_ORBIT = 256;
 const TOLERANCES = { positionMeters: 1e-4, velocityMetersPerSecond: 1e-7 };
+const TEST_ENGINE = { thrustNewtons: 250e3, specificImpulseSeconds: 350, dryMassKg: 10e3, fuelMassKg: 30e3 };
 const EARTH_MASS = 5.9722e24;
 const EARTH_RADIUS = 6.371e6;
 const MU_EARTH = GRAVITATIONAL_CONSTANT * EARTH_MASS;
@@ -228,10 +230,10 @@ function findSpec(node: BodySpec, id: string): BodySpec {
   const period = orbitalPeriodSeconds(el.semiMajorAxisMeters, MU_EARTH);
   const s = stateFromElements(el, MU_EARTH);
   const prop = new VesselPropagator(eph, TOLERANCES);
-  const run = new PropagationRun({ time: 0, position: s.position, velocity: s.velocity });
+  const run = new PropagationRun({ time: 0, position: s.position, velocity: s.velocity, massKg: 1000 });
   const orbits = 20;
   const started = performance.now();
-  const outcome = prop.advance(run, orbits * period, 1e7, null);
+  const outcome = prop.advance(run, orbits * period, 1e7, null, null);
   const exact = stateFromElements({ ...el, meanAnomalyRadians: 2 * Math.PI * orbits }, MU_EARTH);
   const err = distance(run.state.position, exact.position);
   check('vessel vs kepler', outcome.kind === 'reached' && err < 2,
@@ -244,12 +246,12 @@ function findSpec(node: BodySpec, id: string): BodySpec {
   const eph = lonePlanet();
   const s = stateFromElements({ ...stateOrbit(7.5e6), eccentricity: 0.1, inclinationRadians: 0.3 }, MU_EARTH);
   const tEnd = 5 * SECONDS_PER_DAY;
-  const whole = new PropagationRun({ time: 0, position: s.position, velocity: s.velocity });
-  new VesselPropagator(eph, TOLERANCES).advance(whole, tEnd, 1e7, null);
-  const pieces = new PropagationRun({ time: 0, position: s.position, velocity: s.velocity });
+  const whole = new PropagationRun({ time: 0, position: s.position, velocity: s.velocity, massKg: 1000 });
+  new VesselPropagator(eph, TOLERANCES).advance(whole, tEnd, 1e7, null, null);
+  const pieces = new PropagationRun({ time: 0, position: s.position, velocity: s.velocity, massKg: 1000 });
   const prop = new VesselPropagator(eph, TOLERANCES);
   let calls = 0;
-  while (prop.advance(pieces, tEnd, 37, null).kind === 'budget') calls += 1;
+  while (prop.advance(pieces, tEnd, 37, null, null).kind === 'budget') calls += 1;
   const d = distance(whole.state.position, pieces.state.position);
   check('budgeted continuation', d < 1e-6 && calls > 10, `${calls} resumptions, divergence ${fmt(d)} m`);
 }
@@ -258,28 +260,28 @@ function findSpec(node: BodySpec, id: string): BodySpec {
 {
   const eph = lonePlanet();
   const r0 = 2 * EARTH_RADIUS;
-  const run = new PropagationRun({ time: 0, position: { x: r0, y: 0, z: 0 }, velocity: { x: 0, y: 0, z: 0 } });
+  const run = new PropagationRun({ time: 0, position: { x: r0, y: 0, z: 0 }, velocity: { x: 0, y: 0, z: 0 }, massKg: 1000 });
   const traj = new Trajectory();
-  const outcome = new VesselPropagator(eph, TOLERANCES).advance(run, SECONDS_PER_DAY, 1e6, traj);
+  const outcome = new VesselPropagator(eph, TOLERANCES).advance(run, SECONDS_PER_DAY, 1e6, traj, null);
   const x = EARTH_RADIUS / r0;
   const exactT = Math.sqrt(r0 ** 3 / (2 * MU_EARTH)) * (Math.sqrt(x * (1 - x)) + Math.acos(Math.sqrt(x)));
   const rImpact = length(run.state.position);
   check('radial impact', outcome.kind === 'impact' && Math.abs(run.time - exactT) < 1e-3 && rImpact <= EARTH_RADIUS && EARTH_RADIUS - rImpact < 1,
     `t=${run.time.toFixed(4)} s exact ${exactT.toFixed(4)} s, below surface by ${(EARTH_RADIUS - rImpact).toFixed(3)} m, ${traj.count} samples`);
-  check('impact run is final', throws(() => new VesselPropagator(eph, { positionMeters: 1, velocityMetersPerSecond: 1 }).advance(run, 2 * SECONDS_PER_DAY, 10, null)), 'advance after impact throws');
+  check('impact run is final', throws(() => new VesselPropagator(eph, { positionMeters: 1, velocityMetersPerSecond: 1 }).advance(run, 2 * SECONDS_PER_DAY, 10, null, null)), 'advance after impact throws');
 }
 for (const [label, periMargin, expectImpact] of [['grazing 500 m above', 500, false], ['grazing 500 m below', -500, true]] as const) {
   const eph = lonePlanet();
   const rp = EARTH_RADIUS + periMargin;
   const el: EllipticElements = { ...stateOrbit(rp / (1 - 0.3)), eccentricity: 0.3, meanAnomalyRadians: Math.PI };
   const s = stateFromElements(el, MU_EARTH);
-  const run = new PropagationRun({ time: 0, position: s.position, velocity: s.velocity });
+  const run = new PropagationRun({ time: 0, position: s.position, velocity: s.velocity, massKg: 1000 });
   const outcome = new VesselPropagator(eph, TOLERANCES)
-    .advance(run, 3 * orbitalPeriodSeconds(el.semiMajorAxisMeters, MU_EARTH), 1e6, null);
+    .advance(run, 3 * orbitalPeriodSeconds(el.semiMajorAxisMeters, MU_EARTH), 1e6, null, null);
   check(`impact ${label}`, (outcome.kind === 'impact') === expectImpact, `outcome ${outcome.kind}`);
 }
 check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet(), { positionMeters: 1, velocityMetersPerSecond: 1 })
-  .advance(new PropagationRun({ time: 0, position: { x: 1e6, y: 0, z: 0 }, velocity: { x: 0, y: 0, z: 0 } }), 10, 10, null)), 'throws');
+  .advance(new PropagationRun({ time: 0, position: { x: 1e6, y: 0, z: 0 }, velocity: { x: 0, y: 0, z: 0 }, massKg: 1000 }), 10, 10, null, null)), 'throws');
 
 // --- Low orbit in the full Sol system ----------------------------------------------
 {
@@ -294,11 +296,12 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
     time: 0,
     position: { x: planet.position.x + r, y: planet.position.y, z: planet.position.z },
     velocity: { x: planet.velocity.x, y: planet.velocity.y + vCirc, z: planet.velocity.z },
+    massKg: 1000,
   });
   const prop = new VesselPropagator(eph, TOLERANCES);
   const started = performance.now();
   const traj = new Trajectory();
-  const outcome = prop.advance(run, SECONDS_PER_DAY, 1e7, traj);
+  const outcome = prop.advance(run, SECONDS_PER_DAY, 1e7, traj, null);
   const now = eph.bodyState(home.index, run.time);
   const osc = osculatingOrbit(sub(run.state.position, now.position), sub(run.state.velocity, now.velocity), home.gm);
   check('LEO day in Sol system', outcome.kind === 'reached' && Math.abs(osc.semiMajorAxisMeters - r) < 20e3,
@@ -363,7 +366,7 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
   const sim = new Simulation({
     system: SYSTEM_PRESETS.sol, stepsPerOrbit: STEPS_PER_ORBIT, tolerances: TOLERANCES,
     vesselStart: { homeBodyId: 'aurelia', altitudeMeters: 400e3, inclinationRadians: 0 },
-    retentionSeconds: 2 * SECONDS_PER_DAY,
+    retentionSeconds: 2 * SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: 3600,
   });
   const positions = new Float64Array(sim.ephemeris.bodyCount * 3);
   sim.ephemeris.positionsAt(0, positions);
@@ -387,9 +390,140 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
   const crash = new Simulation({
     system: SYSTEM_PRESETS.sol, stepsPerOrbit: STEPS_PER_ORBIT, tolerances: TOLERANCES,
     vesselStart: { homeBodyId: 'aurelia', altitudeMeters: -1e3, inclinationRadians: 0 },
-    retentionSeconds: SECONDS_PER_DAY,
+    retentionSeconds: SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: 3600,
   });
   check('start below surface panics', throws(() => crash.advance(10, 100)), 'throws');
+}
+
+// --- Thrust, rocket equation, finite burns -------------------------------------
+{
+  // Deep space: 1e13 m from the only body, gravity ~4e-12 m/s^2.
+  const eph = lonePlanet();
+  const ve = 350 * STANDARD_GRAVITY;
+  const control: ThrustControl = {
+    thrustNewtons: 250e3, exhaustVelocity: ve, minimumMassKg: 10e3,
+    attitude: { kind: 'inertial', direction: normalize({ x: 1, y: 2, z: -0.5 }) },
+  };
+  const m0 = 40e3;
+  const duration = 300;
+  const start = { time: 0, position: { x: 1e13, y: 0, z: 0 }, velocity: { x: 0, y: 0, z: 0 }, massKg: m0 };
+  const run = new PropagationRun(start);
+  new VesselPropagator(eph, TOLERANCES).advance(run, duration, 1e6, null, control);
+  const m1 = m0 - (250e3 / ve) * duration;
+  const dv = length(run.state.velocity);
+  const expected = ve * Math.log(m0 / m1);
+  check('rocket equation', Math.abs(run.state.massKg - m1) < 1e-9 && Math.abs(dv / expected - 1) < 1e-9,
+    `dv ${dv.toFixed(6)} m/s vs ve ln(m0/m1) ${expected.toFixed(6)} m/s, mass ${run.state.massKg.toFixed(6)} kg`);
+
+  const pieces = new PropagationRun(start);
+  const prop = new VesselPropagator(eph, TOLERANCES);
+  let calls = 0;
+  while (prop.advance(pieces, duration, 3, null, control).kind === 'budget') calls += 1;
+  const d = distance(run.state.position, pieces.state.position) + Math.abs(run.state.massKg - pieces.state.massKg);
+  check('budgeted continuation under thrust', d === 0 && calls > 3, `${calls} resumptions, divergence ${fmt(d)}`);
+  check('burn below dry mass panics', throws(() => new VesselPropagator(eph, TOLERANCES)
+    .advance(new PropagationRun(start), 2000, 1e6, null, control)), 'throws');
+}
+{
+  // Short prograde burn from a circular orbit against the impulsive vis-viva result.
+  const eph = lonePlanet();
+  const r = EARTH_RADIUS + 400e3;
+  const vc = Math.sqrt(MU_EARTH / r);
+  const dvTarget = 100;
+  const ve = 350 * STANDARD_GRAVITY;
+  const thrust = 250e3;
+  const m0 = 40e3;
+  const burn = (m0 * (1 - Math.exp(-dvTarget / ve)) * ve) / thrust;
+  const run = new PropagationRun({ time: 0, position: { x: r, y: 0, z: 0 }, velocity: { x: 0, y: vc, z: 0 }, massKg: m0 });
+  const prop = new VesselPropagator(eph, TOLERANCES);
+  const control: ThrustControl = {
+    thrustNewtons: thrust, exhaustVelocity: ve, minimumMassKg: 10e3,
+    attitude: { kind: 'frenet', referenceBody: 0, tangent: 1, normal: 0, radial: 0 },
+  };
+  eph.extendTo(1);
+  const dir = prop.thrustDirection(control.attitude, 0, run.state.position, run.state.velocity);
+  const traj = new Trajectory();
+  traj.append(0, run.y);
+  prop.advance(run, burn, 1e6, traj, control);
+  prop.advance(run, burn + 2 * 3.6e3, 1e6, traj, null);
+  const apsides = findApsides(traj, eph, 0, burn, 4);
+  const ap = apsides.find((a) => a.kind === 'apoapsis');
+  const v1 = vc + dvTarget;
+  const a = 1 / (2 / r - (v1 * v1) / MU_EARTH);
+  const raImpulsive = 2 * a - r;
+  const gainFinite = ap ? ap.distanceMeters - r : Number.NaN;
+  const gainImpulsive = raImpulsive - r;
+  check('finite vs impulsive burn', distance(dir, { x: 0, y: 1, z: 0 }) < 1e-12 && ap !== undefined && Math.abs(gainFinite / gainImpulsive - 1) < 0.01,
+    `${burn.toFixed(2)} s burn raises apoapsis ${(gainFinite / 1e3).toFixed(3)} km vs impulsive ${(gainImpulsive / 1e3).toFixed(3)} km`);
+
+  const state = { position: { x: r, y: 0, z: 0 }, velocity: { x: 0, y: vc, z: 0 } };
+  const law = (tangent: number, normal: number, radial: number) =>
+    prop.thrustDirection({ kind: 'frenet', referenceBody: 0, tangent, normal, radial }, 0, state.position, state.velocity);
+  const n = law(0, 1, 0), rOut = law(0, 0, 1);
+  check('frenet directions', distance(n, { x: 0, y: 0, z: 1 }) < 1e-12 && distance(rOut, { x: 1, y: 0, z: 0 }) < 1e-12,
+    'normal = r x v, radial-out points away from the body');
+}
+{
+  // Actual apsides of a Kepler orbit.
+  const eph = lonePlanet();
+  const el: EllipticElements = { ...stateOrbit(1.2e7), eccentricity: 0.25, inclinationRadians: 0.5, argumentOfPeriapsisRadians: 1.3, meanAnomalyRadians: 0.4 };
+  const period = orbitalPeriodSeconds(el.semiMajorAxisMeters, MU_EARTH);
+  const s0 = stateFromElements(el, MU_EARTH);
+  const run = new PropagationRun({ time: 0, position: s0.position, velocity: s0.velocity, massKg: 1000 });
+  const traj = new Trajectory();
+  traj.append(0, run.y);
+  new VesselPropagator(eph, TOLERANCES).advance(run, 3 * period, 1e7, traj, null);
+  const found = findApsides(traj, eph, 0, 0, 10);
+  const rp = el.semiMajorAxisMeters * (1 - el.eccentricity), ra = el.semiMajorAxisMeters * (1 + el.eccentricity);
+  const firstPeri = period * (1 - el.meanAnomalyRadians / (2 * Math.PI));
+  let worstD = 0, worstT = 0;
+  let alternates = true;
+  for (let k = 0; k < found.length; k += 1) {
+    const a = found[k]!;
+    if (k > 0 && found[k - 1]!.kind === a.kind) alternates = false;
+    worstD = Math.max(worstD, Math.abs(a.distanceMeters - (a.kind === 'periapsis' ? rp : ra)));
+    const phase = a.kind === 'periapsis' ? firstPeri : firstPeri - period / 2;
+    const expectedTime = phase + period * Math.round((a.time - phase) / period);
+    worstT = Math.max(worstT, Math.abs(a.time - expectedTime));
+  }
+  check('apsides', found.length === 6 && alternates && worstD < 0.5 && worstT < 0.05,
+    `${found.length} apsides, worst distance error ${fmt(worstD)} m, worst time error ${fmt(worstT)} s`);
+}
+{
+  // Simulation: burnout and a deorbit prediction.
+  const sim = new Simulation({
+    system: SYSTEM_PRESETS.sol, stepsPerOrbit: STEPS_PER_ORBIT, tolerances: TOLERANCES,
+    vesselStart: { homeBodyId: 'aurelia', altitudeMeters: 400e3, inclinationRadians: 0 },
+    retentionSeconds: SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: 6 * 3600,
+  });
+  const home = sim.bodyIndex('aurelia');
+  check('navigation reference', sim.navigationReference() === home, 'auto reference is Aurelia in LEO');
+  sim.setAttitude('retrograde');
+  sim.throttle = 1;
+  sim.advance(30, 1e6); // ~190 m/s retrograde; >115 m/s puts periapsis below the surface
+  sim.throttle = 0;
+  sim.advance(1, 1e6);
+  for (let i = 0; i < 50 && !sim.predictionImpact; i += 1) sim.extendPrediction(2000);
+  const impact = sim.predictionImpact;
+  check('deorbit prediction', impact !== null && impact.bodyIndex === home && impact.time > sim.time && impact.time < sim.time + 3600,
+    impact ? `impact on ${sim.system.bodies[impact.bodyIndex]!.id} ${((impact.time - sim.time) / 60).toFixed(1)} min after cutoff` : 'no impact predicted');
+
+  sim.resetVessel();
+  sim.setAttitude('prograde');
+  sim.throttle = 1;
+  const burnTime = (TEST_ENGINE.fuelMassKg * sim.exhaustVelocity) / TEST_ENGINE.thrustNewtons;
+  const report = sim.advance(burnTime + 100, 1e7);
+  check('burnout', report.completed && sim.fuelKg === 0 && sim.deltaVRemaining === 0 && sim.predictionImpact === null,
+    `${burnTime.toFixed(1)} s of fuel, tanks exactly empty, still flying`);
+  sim.throttle = 0.5;
+  const dry = sim.advance(10, 1e6);
+  check('empty tanks give no thrust', !dry.thrusted, 'throttle without fuel does nothing');
+
+  sim.resetVessel();
+  sim.setAttitude('hold');
+  const held = sim.thrustDirection();
+  sim.advance(1200, 1e6);
+  check('attitude hold is inertial', distance(sim.thrustDirection(), held) === 0, 'held direction unchanged after 20 min');
 }
 
 if (failures.length > 0) {

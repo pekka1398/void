@@ -10,3 +10,4 @@ export * from './BodyRotation';
 export * from './ReferenceFrames';
 export * from './Dominance';
 export * from './Simulation';
+export * from './Apsides';

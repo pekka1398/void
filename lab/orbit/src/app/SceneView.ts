@@ -10,17 +10,29 @@ export const RENDER_SCALE = 1e-3;
 const TRAIL_SAMPLES_PER_PERIOD = 128;
 const MAX_TRAIL_SAMPLES = 6000;
 const LABEL_HEIGHT = 13;
+const VESSEL_COLOR = '#7dffb0';
+const PREDICTION_COLOR = '#4fc8ff';
 
 export type Focus = { kind: 'body'; index: number } | { kind: 'vessel' };
+
+/** A labelled point on a trajectory, drawn where the vessel will be at that time. */
+export interface TrajectoryEvent {
+  kind: 'periapsis' | 'apoapsis' | 'impact';
+  time: number;
+  /** Barycentric position at time. */
+  position: Vec3;
+  label: string;
+}
 
 interface BodyView {
   body: CelestialBody;
   group: THREE.Group;
-  light: THREE.PointLight | null;
   trail: THREE.Line;
   cache: PathCache | null;
   marker: HTMLDivElement;
 }
+
+interface MarkerEntry { marker: HTMLDivElement; relative: Vec3; priority: number }
 
 export class SceneView {
   readonly scene = new THREE.Scene();
@@ -28,8 +40,14 @@ export class SceneView {
   private readonly overlay: HTMLElement;
   private readonly bodies: BodyView[];
   private readonly vesselTrail: THREE.Line;
+  private readonly predictionLine: THREE.Line;
+  private readonly thrustArrow: THREE.Line;
   private readonly vesselMarker: HTMLDivElement;
+  private readonly eventMarkers: HTMLDivElement[] = [];
+  private events: TrajectoryEvent[] = [];
   private vesselCache: PathCache | null = null;
+  private predictionCache: PathCache | null = null;
+  private predictionGeneration = -1;
   private frame: FrameEvaluator;
   private trailSpan: number;
   private vesselSpan: number;
@@ -43,9 +61,11 @@ export class SceneView {
     this.vesselSpan = vesselSpan;
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.08));
     this.bodies = sim.system.bodies.map((body) => this.createBody(body, onPick));
-    this.vesselTrail = createLine('#7dffb0', 1);
-    this.scene.add(this.vesselTrail);
-    this.vesselMarker = createMarker(overlay, 'Vessel', '#7dffb0', 'vessel');
+    this.vesselTrail = createLine(VESSEL_COLOR, 1);
+    this.predictionLine = createLine(PREDICTION_COLOR, 0.9);
+    this.thrustArrow = createLine('#ff9a3c', 1);
+    this.scene.add(this.vesselTrail, this.predictionLine, this.thrustArrow);
+    this.vesselMarker = createMarker(overlay, 'Vessel', VESSEL_COLOR, 'vessel');
     this.vesselMarker.addEventListener('click', () => onPick({ kind: 'vessel' }));
   }
 
@@ -68,9 +88,14 @@ export class SceneView {
     this.invalidatePaths();
   }
 
+  setEvents(events: TrajectoryEvent[]): void {
+    this.events = events;
+  }
+
   invalidatePaths(): void {
     for (const view of this.bodies) view.cache = null;
     this.vesselCache = null;
+    this.predictionCache = null;
   }
 
   /** Frame-coordinate position of the focus at the current time. */
@@ -79,10 +104,13 @@ export class SceneView {
     return toFrame(frameNow, this.frame.position(focus.index));
   }
 
-  update(focus: Focus, camera: THREE.Camera, width: number, height: number): void {
+  /** arrowLength: thrust arrow length in render units. */
+  update(focus: Focus, camera: THREE.Camera, width: number, height: number, arrowLength: number): void {
     const now = this.sim.time;
     this.updateTrailCaches(now);
     this.updateVesselCache(now);
+    this.updatePredictionCache(now);
+    const predictionEnd = this.predictionEndFrame();
 
     const frameNow = this.frame.evaluate(now);
     const origin = this.focusPosition(focus, frameNow);
@@ -101,23 +129,27 @@ export class SceneView {
       const centredHere = (this.frame.spec.kind === 'body-inertial' || this.frame.spec.kind === 'body-surface')
         && this.frame.spec.body === view.body.index;
       view.trail.visible = view.cache !== null && !centredHere;
-      if (view.trail.visible && view.cache) writeLine(view.trail, view.cache, origin, p);
+      if (view.trail.visible && view.cache) writeLine(view.trail, view.cache, origin, null, p);
     }
 
-    const vesselVisible = this.vesselCache !== null;
-    this.vesselTrail.visible = vesselVisible;
-    if (this.vesselCache) writeLine(this.vesselTrail, this.vesselCache, origin, vesselFrame);
+    this.vesselTrail.visible = this.vesselCache !== null;
+    if (this.vesselCache) writeLine(this.vesselTrail, this.vesselCache, origin, null, vesselFrame);
+    this.predictionLine.visible = this.predictionCache !== null && predictionEnd !== null;
+    if (this.predictionCache && predictionEnd) writeLine(this.predictionLine, this.predictionCache, origin, vesselFrame, predictionEnd);
+    this.updateThrustArrow(frameNow, sub(vesselFrame, origin), arrowLength);
+
     this.vesselMarker.classList.toggle('crashed', this.sim.impact !== null);
     this.vesselMarker.querySelector('span')!.textContent = this.sim.impact ? 'Vessel ✕ impact' : 'Vessel';
 
     // A label overlapping a higher-priority one keeps only its dot:
-    // focus first, then the vessel, then bodies by mass.
-    const entries: { marker: HTMLDivElement; relative: Vec3; priority: number }[] = this.bodies.map((view) => ({
+    // focus first, then the vessel, then trajectory events, then bodies by mass.
+    const entries: MarkerEntry[] = this.bodies.map((view) => ({
       marker: view.marker,
       relative: sub(bodyFrame[view.body.index]!, origin),
       priority: (focus.kind === 'body' && focus.index === view.body.index ? 1e60 : 0) + view.body.massKg,
     }));
     entries.push({ marker: this.vesselMarker, relative: sub(vesselFrame, origin), priority: focus.kind === 'vessel' ? 1e60 : 1e50 });
+    entries.push(...this.eventEntries(origin));
     entries.sort((a, b) => b.priority - a.priority);
     const shown: { x: number; y: number; w: number }[] = [];
     for (const entry of entries) {
@@ -133,6 +165,41 @@ export class SceneView {
     }
   }
 
+  private eventEntries(origin: Vec3): MarkerEntry[] {
+    while (this.eventMarkers.length < this.events.length) {
+      this.eventMarkers.push(createMarker(this.overlay, '', PREDICTION_COLOR, 'event'));
+    }
+    const entries: MarkerEntry[] = [];
+    this.eventMarkers.forEach((marker, i) => {
+      const event = this.events[i];
+      const covered = event !== undefined && event.time >= this.sim.ephemeris.startTime && event.time <= this.sim.ephemeris.endTime;
+      if (!event || !covered) {
+        marker.style.display = 'none';
+        return;
+      }
+      marker.className = `marker event ${event.kind}`;
+      marker.querySelector('span')!.textContent = event.label;
+      const p = toFrame(this.frame.evaluate(event.time), event.position);
+      entries.push({ marker, relative: sub(p, origin), priority: 1e49 - i });
+    });
+    return entries;
+  }
+
+  private updateThrustArrow(frameNow: FrameState, vesselRelative: Vec3, length: number): void {
+    this.thrustArrow.visible = this.sim.impact === null;
+    if (!this.thrustArrow.visible) return;
+    const d = directionToFrame(frameNow, this.sim.thrustDirection());
+    const attribute = this.thrustArrow.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const a = attribute.array as Float32Array;
+    const x = vesselRelative.x * RENDER_SCALE, y = vesselRelative.y * RENDER_SCALE, z = vesselRelative.z * RENDER_SCALE;
+    a[0] = x; a[1] = z; a[2] = -y;
+    a[3] = x + d.x * length; a[4] = z + d.z * length; a[5] = -(y + d.y * length);
+    attribute.needsUpdate = true;
+    this.thrustArrow.geometry.setDrawRange(0, 2);
+    const burning = this.sim.throttle > 0 && this.sim.fuelKg > 0;
+    (this.thrustArrow.material as THREE.LineBasicMaterial).color.set(burning ? '#ff9a3c' : '#8a7a6a');
+  }
+
   private updateTrailCaches(now: number): void {
     const framePeriod = this.frame.rotationPeriodSeconds(now);
     for (const view of this.bodies) {
@@ -143,24 +210,42 @@ export class SceneView {
         view.cache = new PathCache(Math.max(natural, this.trailSpan / MAX_TRAIL_SAMPLES));
       }
       const index = view.body.index;
-      view.cache.update(now, span, (t) => toFrame(this.frame.evaluate(t), this.frame.position(index)));
+      view.cache.update(now - span, now, (t) => toFrame(this.frame.evaluate(t), this.frame.position(index)));
     }
   }
 
+  private vesselInterval(now: number, span: number): number {
+    const framePeriod = this.frame.rotationPeriodSeconds(now);
+    return Math.max(
+      Math.min(this.vesselNaturalPeriod(now) / TRAIL_SAMPLES_PER_PERIOD, framePeriod / TRAIL_SAMPLES_PER_PERIOD),
+      span / MAX_TRAIL_SAMPLES,
+    );
+  }
+
   private updateVesselCache(now: number): void {
-    const available = now - this.sim.history.firstTime;
-    const span = Math.min(this.vesselSpan, available);
-    if (!this.vesselCache) {
-      const framePeriod = this.frame.rotationPeriodSeconds(now);
-      this.vesselCache = new PathCache(Math.max(
-        Math.min(this.vesselNaturalPeriod(now) / TRAIL_SAMPLES_PER_PERIOD, framePeriod / TRAIL_SAMPLES_PER_PERIOD),
-        this.vesselSpan / MAX_TRAIL_SAMPLES,
-      ));
+    const span = Math.min(this.vesselSpan, now - this.sim.history.firstTime);
+    if (!this.vesselCache) this.vesselCache = new PathCache(this.vesselInterval(now, this.vesselSpan));
+    this.vesselCache.update(now - span, now, (t) => toFrame(this.frame.evaluate(t), this.sim.vesselPositionAt(t)));
+  }
+
+  private updatePredictionCache(now: number): void {
+    const prediction = this.sim.prediction;
+    if (this.sim.impact || prediction.count < 2) {
+      this.predictionCache = null;
+      return;
     }
-    this.vesselCache.update(now, span, (t) => {
-      const frame = this.frame.evaluate(t);
-      return toFrame(frame, this.sim.vesselPositionAt(t));
-    });
+    if (!this.predictionCache || this.predictionGeneration !== this.sim.predictionGeneration) {
+      this.predictionGeneration = this.sim.predictionGeneration;
+      this.predictionCache = new PathCache(this.vesselInterval(now, this.sim.predictionHorizonSeconds));
+    }
+    this.predictionCache.update(now, prediction.lastTime, (t) => toFrame(this.frame.evaluate(t), prediction.sample(t).position));
+  }
+
+  private predictionEndFrame(): Vec3 | null {
+    const prediction = this.sim.prediction;
+    if (this.sim.impact || prediction.count < 2) return null;
+    const t = prediction.lastTime;
+    return toFrame(this.frame.evaluate(t), prediction.position(prediction.count - 1));
   }
 
   /** Osculating period about the dominant body, or the time to cross its distance when unbound. */
@@ -190,17 +275,15 @@ export class SceneView {
     group.add(referenceLines(isStar ? '#fff4d0' : '#ffffff'));
     group.scale.setScalar(body.radiusMeters * RENDER_SCALE);
     this.scene.add(group);
-    let light: THREE.PointLight | null = null;
     if (isStar) {
       // Mostly white so planet colours stay recognisable; decay 0 because distances span AU.
-      light = new THREE.PointLight(new THREE.Color(body.color).lerp(new THREE.Color('#ffffff'), 0.75), 2.2, 0, 0);
-      group.add(light);
+      group.add(new THREE.PointLight(new THREE.Color(body.color).lerp(new THREE.Color('#ffffff'), 0.75), 2.2, 0, 0));
     }
     const trail = createLine(body.color, 0.55);
     this.scene.add(trail);
     const marker = createMarker(this.overlay, body.name, body.color, isStar ? 'star' : 'body');
     marker.addEventListener('click', () => onPick({ kind: 'body', index: body.index }));
-    return { body, group, light, trail, cache: null, marker };
+    return { body, group, trail, cache: null, marker };
   }
 
   private placeMarker(marker: HTMLDivElement, relative: Vec3, camera: THREE.Camera, width: number, height: number): { x: number; y: number } | null {
@@ -227,8 +310,7 @@ function setRenderPosition(target: THREE.Vector3, relative: Vec3): void {
 
 function createLine(color: string, opacity: number): THREE.Line {
   const geometry = new THREE.BufferGeometry();
-  const capacity = 1024;
-  const attribute = new THREE.BufferAttribute(new Float32Array(capacity * 3), 3);
+  const attribute = new THREE.BufferAttribute(new Float32Array(1024 * 3), 3);
   attribute.setUsage(THREE.DynamicDrawUsage);
   geometry.setAttribute('position', attribute);
   const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color, transparent: opacity < 1, opacity }));
@@ -236,15 +318,15 @@ function createLine(color: string, opacity: number): THREE.Line {
   return line;
 }
 
-function writeLine(line: THREE.Line, cache: PathCache, origin: Vec3, live: Vec3): void {
-  const needed = cache.count + 1;
+function writeLine(line: THREE.Line, cache: PathCache, origin: Vec3, head: Vec3 | null, tail: Vec3 | null): void {
+  const needed = cache.count + 2;
   let attribute = line.geometry.getAttribute('position') as THREE.BufferAttribute;
   if (attribute.count < needed) {
     attribute = new THREE.BufferAttribute(new Float32Array(Math.max(needed, attribute.count * 2) * 3), 3);
     attribute.setUsage(THREE.DynamicDrawUsage);
     line.geometry.setAttribute('position', attribute);
   }
-  const written = cache.writeRelative(attribute.array as Float32Array, origin, live, RENDER_SCALE);
+  const written = cache.writeRelative(attribute.array as Float32Array, origin, head, tail, RENDER_SCALE);
   attribute.needsUpdate = true;
   line.geometry.setDrawRange(0, written);
 }
@@ -278,4 +360,3 @@ function createMarker(overlay: HTMLElement, name: string, color: string, kind: s
   overlay.append(marker);
   return marker;
 }
-

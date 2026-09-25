@@ -1,4 +1,4 @@
-import type { CelestialBody, FrameSpec } from '../orbit';
+import type { AttitudeMode, CelestialBody, FrameSpec } from '../orbit';
 import { SECONDS_PER_DAY } from '../orbit';
 import type { Focus } from './SceneView';
 import type { SystemPresetId } from './SystemPresets';
@@ -12,6 +12,16 @@ export const VESSEL_SPANS: readonly [string, number][] = [
   ['1 h', HOUR], ['6 h', 6 * HOUR], ['1 d', SECONDS_PER_DAY], ['7 d', 7 * SECONDS_PER_DAY], ['30 d', 30 * SECONDS_PER_DAY],
 ];
 
+export const PREDICTION_SPANS: readonly [string, number][] = [
+  ['3 h', 3 * HOUR], ['12 h', 12 * HOUR], ['1 d', SECONDS_PER_DAY], ['7 d', 7 * SECONDS_PER_DAY],
+  ['30 d', 30 * SECONDS_PER_DAY], ['90 d', 90 * SECONDS_PER_DAY], ['1 y', 365.25 * SECONDS_PER_DAY],
+];
+
+const ATTITUDES: readonly [AttitudeMode, string, string][] = [
+  ['prograde', 'PRO', '1'], ['retrograde', 'RETRO', '2'], ['normal', 'NRM', '3'], ['antinormal', 'ANRM', '4'],
+  ['radial-out', 'RAD+', '5'], ['radial-in', 'RAD−', '6'], ['hold', 'HOLD', '7'],
+];
+
 export interface PanelHandlers {
   frame(spec: FrameSpec): void;
   focus(focus: Focus): void;
@@ -19,6 +29,10 @@ export interface PanelHandlers {
   vesselSpan(seconds: number): void;
   system(id: SystemPresetId): void;
   resetVessel(): void;
+  attitude(mode: AttitudeMode): void;
+  /** null follows the sphere of influence. */
+  reference(index: number | null): void;
+  predictionHorizon(seconds: number): void;
 }
 
 type FrameKind = FrameSpec['kind'];
@@ -27,15 +41,19 @@ export class Panel {
   readonly element: HTMLDivElement;
   private readonly status: HTMLPreElement;
   private readonly readout: HTMLPreElement;
+  private readonly readoutPanel: HTMLDivElement;
   private readonly frameKind: HTMLSelectElement;
   private readonly frameA: HTMLSelectElement;
   private readonly frameB: HTMLSelectElement;
   private readonly focusSelect: HTMLSelectElement;
+  private readonly throttleBar: HTMLElement;
+  private readonly throttleText: HTMLElement;
+  private readonly attitudeButtons: Map<AttitudeMode, HTMLButtonElement> = new Map();
 
   constructor(
     root: HTMLElement,
     bodies: readonly CelestialBody[],
-    initial: { frame: FrameSpec; focus: Focus; trailSpan: number; vesselSpan: number; system: SystemPresetId },
+    initial: { frame: FrameSpec; focus: Focus; trailSpan: number; vesselSpan: number; predictionSpan: number; system: SystemPresetId },
     handlers: PanelHandlers,
   ) {
     this.element = document.createElement('div');
@@ -44,7 +62,7 @@ export class Panel {
     const spanOptions = (spans: readonly [string, number][], selected: number) =>
       spans.map(([label, s]) => `<option value="${s}"${s === selected ? ' selected' : ''}>${label}</option>`).join('');
     this.element.innerHTML = `
-      <div class="title">ORBIT LAB <small>P2 · viewer</small></div>
+      <div class="title">ORBIT LAB <small>P3 · vessel control</small></div>
       <pre class="status"></pre>
       <label>System <select data-k="system">
         <option value="sol"${initial.system === 'sol' ? ' selected' : ''}>Sol analogue</option>
@@ -62,23 +80,44 @@ export class Panel {
       <label>Body trails <select data-k="trail">${spanOptions(TRAIL_SPANS, initial.trailSpan)}</select></label>
       <label>Vessel history <select data-k="vessel-span">${spanOptions(VESSEL_SPANS, initial.vesselSpan)}</select></label>
       <button data-k="reset">Reset vessel to start orbit</button>
-      <pre class="readout"></pre>
+      <div class="section">VESSEL</div>
+      <div class="throttle"><div class="bar"><b></b></div><span>0%</span></div>
+      <div class="attitude">${ATTITUDES.map(([mode, label, key]) => `<button data-mode="${mode}" title="key ${key}">${label}</button>`).join('')}</div>
+      <label>Reference <select data-k="reference"><option value="auto">Auto (sphere of influence)</option>${bodyOptions}</select></label>
+      <label>Prediction <select data-k="horizon">${spanOptions(PREDICTION_SPANS, initial.predictionSpan)}</select></label>
       <div class="help">
         <kbd>Space</kbd> pause · <kbd>,</kbd> <kbd>.</kbd> warp · <kbd>Tab</kbd> next focus<br>
+        <kbd>Shift</kbd>/<kbd>Ctrl</kbd> throttle · <kbd>Z</kbd> full · <kbd>X</kbd> cut · <kbd>1</kbd>–<kbd>7</kbd> attitude<br>
         Drag to orbit the camera, wheel to zoom, click a label to focus it.
       </div>`;
     root.append(this.element);
+    this.readoutPanel = document.createElement('div');
+    this.readoutPanel.className = 'panel right';
+    this.readoutPanel.innerHTML = '<pre class="readout"></pre>';
+    root.append(this.readoutPanel);
     const q = <T extends HTMLElement>(k: string) => {
       const el = this.element.querySelector<T>(`[data-k="${k}"]`);
       if (!el) throw new Error(`Panel: missing ${k}`);
       return el;
     };
     this.status = this.element.querySelector('.status')!;
-    this.readout = this.element.querySelector('.readout')!;
+    this.readout = this.readoutPanel.querySelector('.readout')!;
     this.frameKind = q('frame-kind');
     this.frameA = q('frame-a');
     this.frameB = q('frame-b');
     this.focusSelect = q('focus');
+    this.throttleBar = this.element.querySelector<HTMLElement>('.throttle b')!;
+    this.throttleText = this.element.querySelector<HTMLElement>('.throttle span')!;
+    for (const button of this.element.querySelectorAll<HTMLButtonElement>('.attitude button')) {
+      const mode = button.dataset.mode as AttitudeMode;
+      this.attitudeButtons.set(mode, button);
+      button.addEventListener('click', () => handlers.attitude(mode));
+    }
+    q<HTMLSelectElement>('reference').addEventListener('change', (e) => {
+      const v = (e.target as HTMLSelectElement).value;
+      handlers.reference(v === 'auto' ? null : Number(v));
+    });
+    q<HTMLSelectElement>('horizon').addEventListener('change', (e) => handlers.predictionHorizon(Number((e.target as HTMLSelectElement).value)));
     this.showFrame(initial.frame);
     this.showFocus(initial.focus);
 
@@ -109,6 +148,16 @@ export class Panel {
 
   showFocus(focus: Focus): void {
     this.focusSelect.value = focus.kind === 'vessel' ? 'vessel' : String(focus.index);
+  }
+
+  setThrottle(value: number, burning: boolean): void {
+    this.throttleBar.style.width = `${(value * 100).toFixed(1)}%`;
+    this.throttleBar.classList.toggle('burning', burning);
+    this.throttleText.textContent = `${Math.round(value * 100)}%`;
+  }
+
+  showAttitude(mode: AttitudeMode): void {
+    for (const [m, button] of this.attitudeButtons) button.classList.toggle('active', m === mode);
   }
 
   setStatus(text: string): void {

@@ -22,14 +22,16 @@ export class PathCache {
     return this.end - this.start;
   }
 
-  /** Keep samples on the grid k * interval inside [now - span, now). */
-  update(now: number, span: number, sample: (t: number) => Vec3): void {
-    const from = now - span;
+  /**
+   * Keep samples on the grid k * interval inside [from, to). Both ends only
+   * move forward for one cache; the owner starts a new cache otherwise.
+   */
+  update(from: number, to: number, sample: (t: number) => Vec3): void {
     while (this.start < this.end && this.times[this.start]! < from) this.start += 1;
     const dt = this.intervalSeconds;
     let next = this.end > this.start ? this.times[this.end - 1]! + dt : Math.ceil(from / dt) * dt;
-    if (this.end > this.start && next < from) next = Math.ceil(from / dt) * dt;
-    for (; next < now; next += dt) {
+    if (next < from) next = Math.ceil(from / dt) * dt;
+    for (; next < to; next += dt) {
       const p = sample(next);
       if (this.end === this.times.length) this.grow();
       this.times[this.end] = next;
@@ -41,16 +43,17 @@ export class PathCache {
   }
 
   /**
-   * Write the cached samples then the live point into out (three.js Y-up axes,
+   * Write head, the cached samples, then tail into out (three.js Y-up axes,
    * relative to origin, scaled). Returns the number of vertices written.
    */
-  writeRelative(out: Float32Array, origin: Vec3, live: Vec3, scaleFactor: number): number {
+  writeRelative(out: Float32Array, origin: Vec3, head: Vec3 | null, tail: Vec3 | null, scaleFactor: number): number {
     let n = 0;
+    if (head) writeVertex(out, n++, head.x - origin.x, head.y - origin.y, head.z - origin.z, scaleFactor);
     for (let i = this.start; i < this.end; i += 1, n += 1) {
       writeVertex(out, n, this.coords[i * 3]! - origin.x, this.coords[i * 3 + 1]! - origin.y, this.coords[i * 3 + 2]! - origin.z, scaleFactor);
     }
-    writeVertex(out, n, live.x - origin.x, live.y - origin.y, live.z - origin.z, scaleFactor);
-    return n + 1;
+    if (tail) writeVertex(out, n++, tail.x - origin.x, tail.y - origin.y, tail.z - origin.z, scaleFactor);
+    return n;
   }
 
   private grow(): void {
