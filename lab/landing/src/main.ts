@@ -9,12 +9,11 @@ import type { Terrain } from './terrain/Surface';
 import './style.css';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
-app.innerHTML = `<canvas id="view"></canvas><aside class="panel"><div class="eyebrow">VOID / PHYSICS LAB 03</div><h1>Landing</h1><p>Land and launch on a rotating planet.</p><div class="readout" id="readout"></div><label>Throttle <strong id="throttleValue">0%</strong><input id="throttle" type="range" min="0" max="100" value="0"></label><div class="buttons"><button id="launch">Launch</button><button id="cut">Cut engine</button><button id="reset">Reset</button></div><label>Thrust direction<select id="direction"><option value="up">Surface up</option><option value="retro">Surface retrograde</option><option value="pro">Surface prograde</option></select></label><label>Camera frame<select id="frame"><option value="surface">Rotating surface</option><option value="inertial">Inertial</option></select></label><label>Time rate<select id="rate"><option value="1">1×</option><option value="5">5×</option><option value="20">20×</option><option value="100">100× (landed only)</option></select></label><label class="check"><input id="colliderLines" type="checkbox" checked> Show collision meshes</label><p class="hint">Drag to orbit camera · scroll to zoom. White lines show the loaded ground and craft colliders. The cyan line forecasts a coast with the engine off; its dot is the terrain impact.</p><div id="error"></div></aside><div class="badge">PEBBLE · 100 km RADIUS · 3.5 h DAY</div>`;
+app.innerHTML = `<canvas id="view"></canvas><aside class="panel"><div class="eyebrow">VOID / PHYSICS LAB 03</div><h1>Landing</h1><p>Land and launch on a rotating planet.</p><div class="readout" id="readout"></div><label>Throttle <strong id="throttleValue">0%</strong><input id="throttle" type="range" min="0" max="100" value="70"></label><div class="buttons"><button id="launch">Launch</button><button id="cut">Cut engine</button><button id="reset">Reset</button></div><label>Camera frame<select id="frame"><option value="surface">Rotating surface</option><option value="inertial">Inertial</option></select></label><label>Time rate<select id="rate"><option value="1">1×</option><option value="5">5×</option><option value="20">20×</option><option value="100">100× (landed only)</option></select></label><label class="check"><input id="colliderLines" type="checkbox" checked> Show collision meshes</label><p class="hint">Space: ignite / cut · Shift / Ctrl: throttle · W / S: pitch · A / D: yaw · Q / E: roll. Drag to orbit camera · scroll to zoom. White lines show colliders; cyan is the engine-off coast forecast.</p><div id="error"></div></aside><div class="badge">PEBBLE · 100 km RADIUS · 3.5 h DAY</div>`;
 const canvas = document.querySelector<HTMLCanvasElement>('#view')!;
 const readout = document.querySelector<HTMLElement>('#readout')!;
 const throttleInput = document.querySelector<HTMLInputElement>('#throttle')!;
 const throttleValue = document.querySelector<HTMLElement>('#throttleValue')!;
-const directionInput = document.querySelector<HTMLSelectElement>('#direction')!;
 const frameInput = document.querySelector<HTMLSelectElement>('#frame')!;
 const rateInput = document.querySelector<HTMLSelectElement>('#rate')!;
 const colliderLinesInput = document.querySelector<HTMLInputElement>('#colliderLines')!;
@@ -59,8 +58,6 @@ const hullColliderLines = new THREE.LineSegments(
 );
 hullColliderLines.renderOrder = 2;
 craft.add(hullColliderLines);
-const flame = new THREE.Mesh(new THREE.ConeGeometry(0.6, 2.8, 12), new THREE.MeshBasicMaterial({ color: 0xffad39 }));
-flame.rotation.x = Math.PI; flame.position.y = -2.5; craft.add(flame);
 const farGeometry = new THREE.SphereGeometry(terrain.radiusMeters, 64, 40);
 const farColors: number[] = [];
 const farPositions = farGeometry.attributes.position!;
@@ -149,14 +146,52 @@ canvas.addEventListener('pointerdown', (e) => { dragging = true; lastX = e.clien
 canvas.addEventListener('pointerup', () => { dragging = false; });
 canvas.addEventListener('pointermove', (e) => { if (!dragging) return; azimuth += (e.clientX - lastX) * 0.006; elevation = Math.max(-1.3, Math.min(1.3, elevation + (e.clientY - lastY) * 0.006)); lastX = e.clientX; lastY = e.clientY; });
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); distance = Math.max(10, Math.min(300_000, distance * Math.exp(e.deltaY * 0.001))); }, { passive: false });
-function command(): LanderControl {
-  const throttle = Number(throttleInput.value) / 100;
-  const d = directionInput.value;
-  return { throttle, up: d === 'up' ? 1 : 0, prograde: d === 'retro' ? -1 : d === 'pro' ? 1 : 0 };
+let engineOn = false;
+let throttlePercent = Number(throttleInput.value);
+throttleInput.addEventListener('input', () => { throttlePercent = Number(throttleInput.value); });
+const keys = new Set<string>();
+const shipAttitude = new THREE.Quaternion();
+function resetAttitude(): void {
+  const d = new THREE.Vector3(launchSite.x, launchSite.z, -launchSite.y).normalize();
+  shipAttitude.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d);
 }
-document.querySelector('#launch')!.addEventListener('click', () => { throttleInput.value = '100'; directionInput.value = 'up'; });
-document.querySelector('#cut')!.addEventListener('click', () => { throttleInput.value = '0'; });
-document.querySelector('#reset')!.addEventListener('click', () => { lander = Lander.landed(RAPIER, eph, 0, terrain, spec, options, 0, launchSite); throttleInput.value = '0'; predictionAt = -Infinity; prediction = null; paused = false; error.textContent = ''; });
+resetAttitude();
+window.addEventListener('keydown', (e) => {
+  if (['Space', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'KeyW', 'KeyS', 'KeyA', 'KeyD', 'KeyQ', 'KeyE'].includes(e.code)) e.preventDefault();
+  if (e.code === 'Space' && !e.repeat) engineOn = !engineOn;
+  keys.add(e.code);
+});
+window.addEventListener('keyup', (e) => { keys.delete(e.code); });
+window.addEventListener('blur', () => keys.clear());
+function axis(positive: string, negative: string): number { return Number(keys.has(positive)) - Number(keys.has(negative)); }
+function steer(dt: number): void {
+  const throttleDelta = Number(keys.has('ShiftLeft') || keys.has('ShiftRight')) - Number(keys.has('ControlLeft') || keys.has('ControlRight'));
+  if (throttleDelta) {
+    throttlePercent = Math.max(0, Math.min(100, throttlePercent + throttleDelta * dt * 45));
+    throttleInput.value = String(Math.round(throttlePercent));
+  }
+  if (lander.mode === 'landed') return;
+  const turn = dt * Math.PI / 3;
+  const pitch = axis('KeyW', 'KeyS'), yaw = axis('KeyD', 'KeyA'), roll = axis('KeyE', 'KeyQ');
+  if (pitch) shipAttitude.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), pitch * turn));
+  if (yaw) shipAttitude.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), yaw * turn));
+  if (roll) shipAttitude.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), roll * turn));
+  shipAttitude.normalize();
+}
+function command(): LanderControl {
+  const thrustAxis = new THREE.Vector3(0, 1, 0).applyQuaternion(shipAttitude);
+  const basisX = new THREE.Vector3(1, 0, 0).applyQuaternion(shipAttitude);
+  const basisY = thrustAxis;
+  const basisZ = new THREE.Vector3(0, 0, 1).applyQuaternion(shipAttitude);
+  const toBody = (v: THREE.Vector3) => new THREE.Vector3(v.x, -v.z, v.y);
+  const qBody = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(toBody(basisX), toBody(basisY), toBody(basisZ)));
+  const d = toBody(thrustAxis);
+  return { throttle: engineOn ? throttlePercent / 100 : 0, up: 1, prograde: 0,
+    direction: { x: d.x, y: d.y, z: d.z }, rotation: { x: qBody.x, y: qBody.y, z: qBody.z, w: qBody.w } };
+}
+document.querySelector('#launch')!.addEventListener('click', () => { throttlePercent = 100; throttleInput.value = '100'; engineOn = true; });
+document.querySelector('#cut')!.addEventListener('click', () => { engineOn = false; });
+document.querySelector('#reset')!.addEventListener('click', () => { lander = Lander.landed(RAPIER, eph, 0, terrain, spec, options, 0, launchSite); throttlePercent = 70; throttleInput.value = '70'; engineOn = false; resetAttitude(); predictionAt = -Infinity; prediction = null; paused = false; error.textContent = ''; });
 colliderLinesInput.addEventListener('change', () => {
   for (const tile of visibleTiles.values()) tile.lines.visible = colliderLinesInput.checked;
   hullColliderLines.visible = colliderLinesInput.checked;
@@ -186,17 +221,16 @@ function render(): void {
   camera.position.copy(up).multiplyScalar(Math.sin(elevation) * distance).addScaledVector(east, Math.cos(elevation) * Math.cos(azimuth) * distance).addScaledVector(north, Math.cos(elevation) * Math.sin(azimuth) * distance);
   camera.lookAt(0, 0, 0);
   camera.near = Math.max(0.1, distance * 0.001); camera.far = 600_000; camera.updateProjectionMatrix();
-  craft.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), up);
-  flame.visible = Number(throttleInput.value) > 0 && lander.fuelKg > 0;
+  craft.quaternion.copy(worldGroup.quaternion).multiply(shipAttitude);
   refreshTiles(p);
   updatePrediction();
   if (pathLine) pathLine.visible = prediction !== null;
-  impactDot.visible = prediction?.impact !== null && prediction !== null;
+  impactDot.visible = !engineOn && prediction?.impact !== null && prediction !== null;
   if (prediction?.impact) impactDot.position.set(prediction.impact.position.x, prediction.impact.position.z, -prediction.impact.position.y);
   const groundSpeed = Math.hypot(state.velocity.x, state.velocity.y, state.velocity.z);
   const eta = prediction?.impact ? `${Math.max(0, prediction.impact.time - lander.time).toFixed(0)} s` : '—';
   readout.innerHTML = `<div><span>Mode</span><b>${lander.mode}</b></div><div><span>Time</span><b>${lander.time.toFixed(1)} s</b></div><div><span>Height AGL</span><b>${Math.max(0, lander.clearance() - spec.halfExtents.y).toFixed(1)} m</b></div><div><span>Ground speed</span><b>${groundSpeed.toFixed(1)} m/s</b></div><div><span>Fuel</span><b>${lander.fuelKg.toFixed(1)} kg</b></div><div><span>Coast impact</span><b>${eta}</b></div>`;
-  throttleValue.textContent = `${throttleInput.value}%`;
+  throttleValue.textContent = `${throttleInput.value}%${engineOn ? ' · firing' : ''}`;
   const w = canvas.clientWidth, h = canvas.clientHeight;
   if (canvas.width !== Math.floor(w * renderer.getPixelRatio()) || canvas.height !== Math.floor(h * renderer.getPixelRatio())) { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
   renderer.render(scene, camera);
@@ -209,8 +243,9 @@ function loop(now: number): void {
     try {
       const rate = Number(rateInput.value);
       if (rate > 20 && lander.mode !== 'landed') rateInput.value = '20';
+      steer(wall);
       lander.advance(wall * Number(rateInput.value), command());
-    } catch (e) { paused = true; error.textContent = `Simulation paused: ${e instanceof Error ? e.message : String(e)}`; throttleInput.value = '0'; }
+    } catch (e) { paused = true; error.textContent = `Simulation paused: ${e instanceof Error ? e.message : String(e)}`; engineOn = false; }
   }
   render();
 }

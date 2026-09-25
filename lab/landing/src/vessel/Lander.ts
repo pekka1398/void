@@ -1,6 +1,6 @@
 import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import {
-  PropagationRun, STANDARD_GRAVITY, VesselPropagator,
+  bodyOrientation, PropagationRun, STANDARD_GRAVITY, VesselPropagator,
   type Ephemeris, type ThrustControl, type Tolerances, type Vec3,
 } from '../orbitCore';
 import { ContactWorld, type ContactWorldOptions, type Quaternion } from '../physics/ContactWorld';
@@ -24,7 +24,12 @@ export interface LanderSpec {
  * orbit lab's surface law: the normalised up * (local vertical) + prograde *
  * (direction of the velocity over the ground).
  */
-export interface LanderControl { throttle: number; up: number; prograde: number }
+export interface LanderControl {
+  throttle: number; up: number; prograde: number;
+  /** Optional body-fixed thrust axis and collider orientation for manual steering. */
+  direction?: Vec3;
+  rotation?: Quaternion;
+}
 
 export type LanderMode = 'flight' | 'contact' | 'landed';
 
@@ -164,7 +169,7 @@ export class Lander {
     this.frame.ephemeris.extendTo(target);
     for (;;) {
       if (this.mode === 'landed') {
-        if (control.throttle > 0 && this.fuelKg > 0) { this.enterContact(this.bodyFixedState(), { x: 0, y: 0, z: 0 }); continue; }
+        if (control.throttle > 0 && this.fuelKg > 0) { this.enterContact(this.bodyFixedState(), { x: 0, y: 0, z: 0 }, control.rotation); continue; }
         this.time = target;
         return;
       }
@@ -192,7 +197,18 @@ export class Lander {
       thrustNewtons: control.throttle * this.spec.thrustNewtons,
       exhaustVelocity: this.exhaustVelocity,
       minimumMassKg: this.spec.dryMassKg,
-      attitude: { kind: 'surface', referenceBody: this.frame.body.index, up: control.up, prograde: control.prograde },
+      attitude: control.direction
+        ? { kind: 'inertial', direction: this.bodyDirectionToInertial(control.direction) }
+        : { kind: 'surface', referenceBody: this.frame.body.index, up: control.up, prograde: control.prograde },
+    };
+  }
+
+  private bodyDirectionToInertial(direction: Vec3): Vec3 {
+    const axes = bodyOrientation(this.frame.body, this.time);
+    return {
+      x: direction.x * axes.x.x + direction.y * axes.y.x + direction.z * axes.z.x,
+      y: direction.x * axes.x.y + direction.y * axes.y.y + direction.z * axes.z.y,
+      z: direction.x * axes.x.z + direction.y * axes.y.z + direction.z * axes.z.z,
     };
   }
 
@@ -209,7 +225,7 @@ export class Lander {
       // The engine setting carries over from flight into contact.
       const state = this.bodyFixedState();
       const thrustNow = this.thrustControl(control);
-      this.enterContact(state, thrustNow ? scaleVec(surfaceDirection(state, control), thrustNow.thrustNewtons / this.massKg) : { x: 0, y: 0, z: 0 });
+      this.enterContact(state, thrustNow ? scaleVec(surfaceDirection(state, control), thrustNow.thrustNewtons / this.massKg) : { x: 0, y: 0, z: 0 }, control.rotation);
       return;
     }
     // Longest time the band cannot be reached in: |v| t + A t^2 / 2 = gap,
@@ -234,6 +250,7 @@ export class Lander {
 
   private contactStep(control: LanderControl): void {
     const { world, body } = this.contact!;
+    if (control.rotation) body.setRotation(control.rotation, true);
     const dt = this.options.contact.stepSeconds;
     const flow = (control.throttle * this.spec.thrustNewtons) / this.exhaustVelocity;
     // A step that would empty the tanks burns only what is left.
@@ -260,14 +277,14 @@ export class Lander {
   }
 
   /** pushBefore: thrust acceleration over the half step before now (zero from rest). */
-  private enterContact(state: FrameState, pushBefore: Vec3): void {
+  private enterContact(state: FrameState, pushBefore: Vec3, rotation?: Quaternion): void {
     this.leave();
     this.previousPush = pushBefore;
     const world = new ContactWorld(this.rapier, this.frame, this.terrain, this.options.contact, this.time, state.position);
     const { halfExtents, friction } = this.spec;
     const body = world.addBody(
       { shape: { kind: 'box', halfExtents }, massKg: this.massKg, friction, restitution: 0, lockRotations: true },
-      state, uprightAt(state.position), pushBefore,
+      state, rotation ?? uprightAt(state.position), pushBefore,
     );
     this.contact = { world, body };
     this.restingFor = 0;
@@ -305,7 +322,8 @@ export class Lander {
 }
 
 /** The surface law in body-fixed axes, where the ground is at rest (same definition as the orbit core's). */
-export function surfaceDirection(state: FrameState, control: { up: number; prograde: number }): Vec3 {
+export function surfaceDirection(state: FrameState, control: { up: number; prograde: number; direction?: Vec3 }): Vec3 {
+  if (control.direction) return control.direction;
   const p = state.position, v = state.velocity;
   const r = Math.hypot(p.x, p.y, p.z);
   const g = Math.hypot(v.x, v.y, v.z);

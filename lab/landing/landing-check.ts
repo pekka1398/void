@@ -412,6 +412,28 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
     `100 m drop reaches sampled terrain after ${hit?.time.toFixed(2) ?? '—'} s, height error ${fmt(distanceToCentre - surface)} m`);
 }
 
+// Manual attitude must steer the actual thrust in both physics modes.
+{
+  const env = plainPebble();
+  const p = { x: env.terrain.radiusMeters + env.terrain.maxHeightMeters + 5000, y: 0, z: 0 };
+  const state = { position: p, velocity: { x: 0, y: 0, z: 0 } };
+  const upright = Lander.flying(RAPIER, env.ephemeris, 0, env.terrain, LANDER_SPEC, LANDER_OPTIONS, 0, state);
+  const tilted = Lander.flying(RAPIER, env.ephemeris, 0, env.terrain, LANDER_SPEC, LANDER_OPTIONS, 0, state);
+  upright.advance(5, { throttle: 1, up: 1, prograde: 0, direction: { x: 1, y: 0, z: 0 } });
+  tilted.advance(5, { throttle: 1, up: 1, prograde: 0, direction: { x: 0.6, y: 0.8, z: 0 } });
+  const lateral = tilted.bodyFixedState().position.y - upright.bodyFixedState().position.y;
+  check('manual thrust direction', lateral > 40 && tilted.mode === 'flight',
+    `five-second tilted burn displaces the craft ${lateral.toFixed(2)} m sideways in the orbit propagator`);
+
+  const contactUp = Lander.landed(RAPIER, env.ephemeris, 0, env.terrain, LANDER_SPEC, LANDER_OPTIONS, 0, LAUNCH_SITE);
+  const contactTilt = Lander.landed(RAPIER, env.ephemeris, 0, env.terrain, LANDER_SPEC, LANDER_OPTIONS, 0, LAUNCH_SITE);
+  contactUp.advance(2, { throttle: 1, up: 1, prograde: 0, direction: { x: 0.8, y: 0.55, z: 0.25 } });
+  contactTilt.advance(2, { throttle: 1, up: 1, prograde: 0, direction: { x: 0.48, y: 0.33, z: 0.812 } });
+  const contactSideways = distance(contactUp.bodyFixedState().position, contactTilt.bodyFixedState().position);
+  check('contact thrust steering', contactSideways > 5 && contactTilt.mode === 'contact',
+    `two-second tilted burn separates from an upright burn by ${contactSideways.toFixed(2)} m in Rapier`);
+}
+
 if (failures.length > 0) {
   console.log(`\n${failures.length} CHECK(S) FAILED: ${failures.join(', ')}`);
   process.exit(1);

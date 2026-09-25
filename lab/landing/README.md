@@ -69,7 +69,9 @@ Not modelled: the frame's fictitious torques on spinning bodies (of order ω, 6e
 
 ## Interactive page
 
-Open the Vite page and click **Launch**. The throttle and surface-relative thrust direction are adjustable; **Cut engine** starts a coast. The camera can follow either the rotating surface or inertial axes. The craft stays at the render origin for precision, while the terrain and planet move around it. Nearby visual tiles use the same mesh builder as contact tiles. A coarse planet mesh fills the distance behind them.
+Open the Vite page and click **Launch**, or set the throttle and press **Space**. **Cut engine** starts a coast. The camera can follow either the rotating surface or inertial axes. The craft stays at the render origin for precision, while the terrain and planet move around it. Nearby visual tiles use the same mesh builder as contact tiles. A coarse planet mesh fills the distance behind them.
+
+Keyboard controls: **Space** toggles ignition, **Shift/Ctrl** raise/lower throttle, **W/S** pitch, **A/D** yaw, and **Q/E** roll. Steering rotates the rendered craft and its contact box. The thrust axis follows that orientation in both contact and inertial flight. Pitch and yaw change the burn trajectory; roll rotates about the thrust axis. Steering starts after lift-off. The old yellow exhaust cone is removed, and the gold coast-impact marker is hidden while the engine fires.
 
 **Show collision meshes** overlays the unique triangle edges of loaded terrain colliders and the craft's Rapier box in white. The box reaches the bottoms of the visible landing legs, so those legs no longer extend below the contact shape.
 
