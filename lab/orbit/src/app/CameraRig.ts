@@ -55,6 +55,9 @@ export class CameraRig {
     camera.position.set(fx * this.distance, fz * this.distance, -fy * this.distance);
     camera.up.set(0, 1, 0);
     camera.lookAt(0, 0, 0);
+    // Labels are projected before render(); without this they would use the
+    // previous frame's view matrix and lag one frame behind while rotating.
+    camera.updateMatrixWorld();
     camera.near = this.distance * 1e-4;
     camera.far = this.distance * 1e9;
     camera.updateProjectionMatrix();

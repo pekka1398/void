@@ -211,7 +211,8 @@ export class SceneView {
     if (!visible) return null;
     const x = (this.projected.x * 0.5 + 0.5) * width;
     const y = (-this.projected.y * 0.5 + 0.5) * height;
-    marker.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+    // Whole pixels keep the label text crisp; sub-pixel offsets make it shimmer.
+    marker.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
     return { x, y };
   }
 }
