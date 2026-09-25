@@ -1,15 +1,16 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three/webgpu';
-import { bodyOrientation, buildSystem, Ephemeris, type Vec3 } from './orbitCore';
-import { PLANETS, planetById } from './planet/Planets';
-import { levelForTileSize } from './terrain/TerrainTiles';
+import { bodyOrientation, type Vec3 } from './orbitCore';
+import { PLANETS, planetById, planetEphemeris } from './planet/Planets';
+import { demoRocket } from './vessel/DemoRocket';
+import { RocketVisual } from './render/RocketVisual';
+import { TerrainColliderLines } from './render/TerrainColliderLines';
 import { TerrainView } from './terrain/TerrainView';
 import { LabLog } from './debug/LabLog';
 import { tileContaining, tileId } from './lodCore';
 import { predictCoast, type CoastPrediction } from './vessel/CoastPrediction';
-import { type LanderControl, type LanderOptions, type LanderSpec } from './vessel/Lander';
+import { type LanderControl } from './vessel/Lander';
 import { PartJointRocket } from './vessel/PartJointRocket';
-import type { BodyShape, TileCollider } from './physics/ContactWorld';
 import type { Terrain } from './terrain/Surface';
 import './style.css';
 
@@ -39,42 +40,11 @@ planetInput.addEventListener('change', () => {
 document.querySelector<HTMLElement>('#badge')!.textContent = planet.label;
 /** Farthest camera distance from the rocket: a few planet radii, at least 300 km. */
 const maxCameraDistance = Math.max(300_000, 3 * terrain.radiusMeters);
-const eph = new Ephemeris(buildSystem(planet.system), { stepSeconds: 60, chunkSteps: 1024 });
-eph.extendTo(60);
-type Piece = Extract<BodyShape, { kind: 'compound' }>['parts'][number];
-const upperPieces: Piece[] = [
-  { shape: { kind: 'cylinder', radius: 1.05, halfHeight: 0.875 }, position: { x: 0, y: 0.175, z: 0 } },
-  { shape: { kind: 'cone', radius: 0.9, halfHeight: 0.5 }, position: { x: 0, y: 1.55, z: 0 } },
-  { shape: { kind: 'cone', radius: 0.43, halfHeight: 0.185 }, position: { x: 0, y: -0.86, z: 0 } },
-];
-const boosterPieces: Piece[] = [
-  { shape: { kind: 'cylinder', radius: 1.25, halfHeight: 1.175 }, position: { x: 0, y: 0.175, z: 0 } },
-  { shape: { kind: 'cone', radius: 0.58, halfHeight: 0.185 }, position: { x: 0, y: -1.21, z: 0 } },
-];
-for (const x of [-1, 1]) for (const z of [-1, 1]) {
-  const root = new THREE.Vector3(x * 0.72, 0.05, z * 0.72);
-  const foot = new THREE.Vector3(x * 1.28, -1.37, z * 1.28);
-  const span = foot.clone().sub(root);
-  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), span.clone().normalize());
-  const middle = root.add(foot).multiplyScalar(0.5);
-  boosterPieces.push({ shape: { kind: 'cylinder', radius: 0.1, halfHeight: span.length() / 2 }, position: { x: middle.x, y: middle.y, z: middle.z }, rotation: { x: q.x, y: q.y, z: q.z, w: q.w } });
-  boosterPieces.push({ shape: { kind: 'box', halfExtents: { x: 0.21, y: 0.05, z: 0.21 } }, position: { x: foot.x, y: foot.y, z: foot.z } });
-}
-const boosterShape: BodyShape = { kind: 'compound', parts: boosterPieces };
-const upperShape: BodyShape = { kind: 'compound', parts: upperPieces };
-const spec: LanderSpec = { thrustNewtons: 28_000, specificImpulseSeconds: 280, dryMassKg: 1000, fuelMassKg: 900,
-  // Reference point is the attached parts' centre of mass; feet are about 2 m below it.
-  halfExtents: { x: 1.5, y: 2.05, z: 1.5 }, friction: 0.8 };
-const upperSpec: LanderSpec = { thrustNewtons: 8_000, specificImpulseSeconds: 330, dryMassKg: 300, fuelMassKg: 200,
-  halfExtents: { x: 1.05, y: 1.15, z: 1.05 }, contactShape: upperShape, friction: 0.8, crashToleranceMetersPerSecond: 10 };
-const boosterSpec: LanderSpec = { thrustNewtons: spec.thrustNewtons, specificImpulseSeconds: spec.specificImpulseSeconds,
-  dryMassKg: 500, fuelMassKg: 900, halfExtents: { x: 1.5, y: 1.42, z: 1.5 }, contactShape: boosterShape, friction: 0.8, crashToleranceMetersPerSecond: 10 };
-const options: LanderOptions = { contact: { stepSeconds: 1 / 60, tileLevel: levelForTileSize(terrain.radiusMeters, 300), tileResolution: 33,
-  tileReachMeters: 300, tileKeepMeters: 600, recenterMeters: 1000 }, tolerances: { positionMeters: 1e-6, velocityMetersPerSecond: 1e-9 },
-  bandEnterMeters: 200, bandExitMeters: 400 };
-const launchSite = { x: 0.8, y: 0.55, z: 0.25 };
+const { ephemeris: eph, bodyIndex } = planetEphemeris(planet);
+const rocket = demoRocket(terrain);
+const { full: spec, upper: upperSpec, booster: boosterSpec, options, launchSite } = rocket;
 await RAPIER.init();
-let lander = PartJointRocket.landed(RAPIER, eph, terrain, spec, upperSpec, boosterSpec, options, launchSite);
+let lander = PartJointRocket.landed(RAPIER, eph, bodyIndex, terrain, spec, upperSpec, boosterSpec, options, launchSite);
 let prediction: CoastPrediction | null = null;
 let predictionAt = -Infinity;
 let paused = false;
@@ -90,108 +60,10 @@ const worldGroup = new THREE.Group();
 scene.add(worldGroup);
 scene.add(new THREE.HemisphereLight(0xcbe7ff, 0x26313d, 2.2));
 const sun = new THREE.DirectionalLight(0xffe7bb, 2.8); sun.position.set(3, 7, 4); scene.add(sun);
-const upperVisual = new THREE.Group();
-const hull = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.05, 1.75, 16), new THREE.MeshStandardMaterial({ color: 0xece7d4, metalness: 0.3, roughness: 0.55 }));
-hull.position.y = 0.175;
-upperVisual.add(hull);
-const nose = new THREE.Mesh(new THREE.ConeGeometry(0.9, 1.0, 16), new THREE.MeshStandardMaterial({ color: 0xece7d4, metalness: 0.3, roughness: 0.55 }));
-nose.position.y = 1.55; upperVisual.add(nose);
-const trim = new THREE.MeshStandardMaterial({ color: 0x273947, metalness: 0.72, roughness: 0.34 });
-const paleTrim = new THREE.MeshStandardMaterial({ color: 0xd1d6d0, metalness: 0.55, roughness: 0.42 });
-const glass = new THREE.MeshStandardMaterial({ color: 0x214c63, emissive: 0x0a2632, emissiveIntensity: 0.45, metalness: 0.35, roughness: 0.18 });
-const upperSkirt = new THREE.Mesh(new THREE.CylinderGeometry(1.02, 1.04, 0.28, 24), trim);
-upperSkirt.position.y = -0.57; upperVisual.add(upperSkirt);
-const noseRim = new THREE.Mesh(new THREE.CylinderGeometry(0.92, 0.92, 0.08, 24), trim);
-noseRim.position.y = 1.06; upperVisual.add(noseRim);
-for (let i = 0; i < 4; i += 1) {
-  const angle = i * Math.PI / 2;
-  const windowFrame = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.31, 0.035), trim);
-  const windowPane = new THREE.Mesh(new THREE.BoxGeometry(0.39, 0.22, 0.045), glass);
-  for (const piece of [windowFrame, windowPane]) {
-    piece.position.set(Math.sin(angle) * 0.935, 0.5, Math.cos(angle) * 0.935);
-    piece.rotation.y = angle;
-    upperVisual.add(piece);
-  }
-  windowPane.position.add(new THREE.Vector3(Math.sin(angle) * 0.025, 0, Math.cos(angle) * 0.025));
-}
-scene.add(upperVisual);
-const boosterGroup = new THREE.Group();
-for (const x of [-1, 1]) for (const z of [-1, 1]) {
-  const root = new THREE.Vector3(x * 0.72, -1.25, z * 0.72);
-  const foot = new THREE.Vector3(x * 1.28, -2.67, z * 1.28);
-  const between = new THREE.Vector3().subVectors(foot, root);
-  const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.1, between.length(), 8), new THREE.MeshStandardMaterial({ color: 0x687381, metalness: 0.5 }));
-  leg.position.copy(root).add(foot).multiplyScalar(0.5);
-  leg.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), between.normalize());
-  leg.position.y += 1.3;
-  boosterGroup.add(leg);
-  const pad = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.1, 0.42), new THREE.MeshStandardMaterial({ color: 0x687381, metalness: 0.5 }));
-  pad.position.copy(foot); pad.position.y += 1.3; boosterGroup.add(pad);
-}
-scene.add(boosterGroup);
-const colliderLineMaterial = new THREE.LineBasicMaterial({ color: 0x3dff6e, depthTest: true });
-function shapeLines(shape: BodyShape): THREE.Group {
-  const group = new THREE.Group();
-  const pieces = shape.kind === 'compound' ? shape.parts : [{ shape, position: { x: 0, y: 0, z: 0 } }];
-  for (const piece of pieces) {
-    const s = piece.shape;
-    const geometry = s.kind === 'box' ? new THREE.BoxGeometry(2 * s.halfExtents.x, 2 * s.halfExtents.y, 2 * s.halfExtents.z)
-      : s.kind === 'ball' ? new THREE.SphereGeometry(s.radius, 12, 8)
-      : s.kind === 'cone' ? new THREE.ConeGeometry(s.radius, 2 * s.halfHeight, 12)
-      : new THREE.CylinderGeometry(s.radius, s.radius, 2 * s.halfHeight, 12);
-    const lines = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), colliderLineMaterial);
-    lines.position.set(piece.position.x, piece.position.y, piece.position.z);
-    if ('rotation' in piece && piece.rotation) lines.quaternion.set(piece.rotation.x, piece.rotation.y, piece.rotation.z, piece.rotation.w);
-    lines.renderOrder = 2;
-    group.add(lines);
-  }
-  return group;
-}
-const upperColliderLines = shapeLines(upperShape);
-upperVisual.add(upperColliderLines);
-const boosterVisual = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.25, 2.35, 16), new THREE.MeshStandardMaterial({ color: 0xd87543, metalness: 0.35, roughness: 0.6 }));
-boosterVisual.position.y = 0.175;
-boosterGroup.add(boosterVisual);
-for (const y of [1.23, -0.93]) {
-  const band = new THREE.Mesh(new THREE.CylinderGeometry(y > 0 ? 1.12 : 1.245, y > 0 ? 1.15 : 1.245, 0.1, 24), trim);
-  band.position.y = y; boosterGroup.add(band);
-}
-for (let i = 0; i < 4; i += 1) {
-  const angle = i * Math.PI / 2;
-  const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.75, 8), paleTrim);
-  pipe.position.set(Math.sin(angle) * 1.19, -0.05, Math.cos(angle) * 1.19);
-  boosterGroup.add(pipe);
-}
-function addEngine(parent: THREE.Group, nozzleY: number, radius: number): { plume: THREE.Group; light: THREE.PointLight } {
-  const mount = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.58, radius * 0.68, 0.16, 24), trim);
-  mount.position.y = nozzleY + 0.18; parent.add(mount);
-  const bell = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.58, radius, 0.37, 24, 1, true),
-    new THREE.MeshStandardMaterial({ color: 0x778995, metalness: 0.85, roughness: 0.28, side: THREE.DoubleSide }));
-  bell.position.y = nozzleY - 0.07; parent.add(bell);
-  const lip = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.045, 8, 24), trim);
-  lip.rotation.x = Math.PI / 2;
-  lip.position.y = nozzleY - 0.255; parent.add(lip);
-  const plume = new THREE.Group();
-  plume.position.y = nozzleY - 0.28;
-  const outer = new THREE.Mesh(new THREE.ConeGeometry(radius * 0.9, 2.8, 20, 1, true),
-    new THREE.MeshBasicMaterial({ color: 0xff8c43, transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
-  outer.rotation.z = Math.PI;
-  outer.position.y = -1.4;
-  const core = new THREE.Mesh(new THREE.ConeGeometry(radius * 0.48, 1.9, 20, 1, true),
-    new THREE.MeshBasicMaterial({ color: 0xbcefff, transparent: true, opacity: 0.75, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
-  core.rotation.z = Math.PI;
-  core.position.y = -0.95;
-  plume.add(outer, core);
-  plume.visible = false;
-  parent.add(plume);
-  const light = new THREE.PointLight(0xffb66d, 0, 16);
-  light.position.y = nozzleY - 0.45; parent.add(light);
-  return { plume, light };
-}
-const upperEngine = addEngine(upperVisual, -0.79, 0.43);
-const boosterEngine = addEngine(boosterGroup, -1.14, 0.58);
-const boosterColliderLines = shapeLines(boosterShape);
-boosterGroup.add(boosterColliderLines);
+const visual = new RocketVisual(rocket.upperShape, rocket.boosterShape);
+const upperVisual = visual.upper;
+const boosterGroup = visual.booster;
+scene.add(upperVisual, boosterGroup);
 // Tiles come in body-fixed axes; this group turns them into the rendered frame (x, z, -y) and the camera frame.
 const bodyFixedGroup = new THREE.Group();
 scene.add(bodyFixedGroup);
@@ -201,6 +73,9 @@ const terrainView = new TerrainView(terrain, planet.terrainConfig, options.conta
   paused = true; engineArmed = false; error.textContent = `Terrain failed: ${e.message}`;
 });
 bodyFixedGroup.add(terrainView.tiles.group);
+const colliderLines = new TerrainColliderLines();
+colliderLines.setVisible(colliderLinesInput.checked);
+bodyFixedGroup.add(colliderLines.group);
 terrainView.tiles.setMeshWireframe(meshLinesInput.checked);
 terrainView.tiles.setTileBoundaries(tileBoundariesInput.checked);
 // Dev sessions log LOD events to lab/landing/lab-log/lod.jsonl for later reading.
@@ -253,48 +128,6 @@ function logLod(selection: ReturnType<TerrainView['update']>): void {
     previousBuild = build;
     frameTimes.frames = 0;
     for (const p of [frameTimes.frame, frameTimes.physics, frameTimes.lod, frameTimes.draw]) { p.sum = 0; p.max = 0; }
-  }
-}
-/** Green edges of the terrain triangles each loaded Rapier collider holds, keyed by tile id. */
-const colliderTileLines = new Map<string, THREE.LineSegments>();
-function uniqueEdges(triangles: Uint32Array): Uint32Array {
-  const seen = new Set<string>();
-  const edges: number[] = [];
-  for (let i = 0; i < triangles.length; i += 3) {
-    for (const [a, b] of [[triangles[i]!, triangles[i + 1]!], [triangles[i + 1]!, triangles[i + 2]!], [triangles[i + 2]!, triangles[i]!]] as [number, number][]) {
-      const lo = Math.min(a, b), hi = Math.max(a, b);
-      const id = `${lo}/${hi}`;
-      if (!seen.has(id)) { seen.add(id); edges.push(lo, hi); }
-    }
-  }
-  return new Uint32Array(edges);
-}
-function syncColliderLines(renderOrigin: Vec3): void {
-  const live = new Map<string, TileCollider>();
-  for (const world of lander.contactWorlds()) for (const [id, tile] of world.terrainColliders()) live.set(id, tile);
-  for (const [id, lines] of colliderTileLines) {
-    if (live.has(id)) continue;
-    bodyFixedGroup.remove(lines);
-    lines.geometry.dispose();
-    colliderTileLines.delete(id);
-  }
-  for (const [id, tile] of live) {
-    let lines = colliderTileLines.get(id);
-    if (!lines) {
-      // The collider's own triangles, relative to the tile origin (its translation in the contact world).
-      const indices = tile.collider.indices();
-      if (!indices) throw new Error(`main.ts: terrain collider ${id} has no triangle indices`);
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.BufferAttribute(tile.collider.vertices(), 3));
-      geometry.setIndex(new THREE.BufferAttribute(uniqueEdges(indices), 1));
-      lines = new THREE.LineSegments(geometry, colliderLineMaterial);
-      // Over the white mesh edges (1), under the red tile boundaries (2).
-      lines.renderOrder = 1.5;
-      bodyFixedGroup.add(lines);
-      colliderTileLines.set(id, lines);
-    }
-    lines.position.set(tile.origin.x - renderOrigin.x, tile.origin.y - renderOrigin.y, tile.origin.z - renderOrigin.z);
-    lines.visible = colliderLinesInput.checked;
   }
 }
 let pathLine: THREE.Line | null = null;
@@ -355,13 +188,10 @@ function command(): LanderControl {
 }
 document.querySelector('#launch')!.addEventListener('click', stage);
 document.querySelector('#cut')!.addEventListener('click', () => { throttlePercent = 0; throttleInput.value = '0'; });
-document.querySelector('#reset')!.addEventListener('click', () => { lander.free(); lander = PartJointRocket.landed(RAPIER, eph, terrain, spec, upperSpec, boosterSpec, options, launchSite); stageNumber = 0; throttlePercent = 0; throttleInput.value = '0'; engineArmed = false; predictionAt = -Infinity; prediction = null; paused = false; error.textContent = ''; });
+document.querySelector('#reset')!.addEventListener('click', () => { lander.free(); lander = PartJointRocket.landed(RAPIER, eph, bodyIndex, terrain, spec, upperSpec, boosterSpec, options, launchSite); stageNumber = 0; throttlePercent = 0; throttleInput.value = '0'; engineArmed = false; predictionAt = -Infinity; prediction = null; paused = false; error.textContent = ''; });
 meshLinesInput.addEventListener('change', () => terrainView.tiles.setMeshWireframe(meshLinesInput.checked));
 tileBoundariesInput.addEventListener('change', () => terrainView.tiles.setTileBoundaries(tileBoundariesInput.checked));
-colliderLinesInput.addEventListener('change', () => {
-  upperColliderLines.visible = colliderLinesInput.checked;
-  boosterColliderLines.visible = colliderLinesInput.checked;
-});
+colliderLinesInput.addEventListener('change', () => { visual.setColliderLines(colliderLinesInput.checked); colliderLines.setVisible(colliderLinesInput.checked); });
 function orientBody(p: Vec3, t: number): THREE.Vector3 {
   if (frameInput.value === 'surface') return new THREE.Vector3(p.x, p.z, -p.y);
   const a = bodyOrientation(lander.frame.body, t);
@@ -406,11 +236,8 @@ function render(): void {
   // A booster lost while attached leaves the upper stage flying on its own.
   if (stageNumber === 1 && lander.separated) stageNumber = 2;
   const firing = !paused && engineArmed && lander.fuelKg > 0 ? throttlePercent / 100 : 0;
-  for (const [engine, active] of [[boosterEngine, stageNumber === 1], [upperEngine, stageNumber === 2]] as const) {
-    engine.plume.visible = active && firing > 0;
-    engine.plume.scale.y = 0.55 + firing * (0.8 + 0.04 * Math.sin(lander.time * 40));
-    engine.light.intensity = active ? firing * 8 : 0;
-  }
+  RocketVisual.fire(visual.boosterEngine, stageNumber === 1, firing, lander.time);
+  RocketVisual.fire(visual.upperEngine, stageNumber === 2, firing, lander.time);
   // Terrain is finest around every live part; tiles are placed relative to the upper stage, the scene origin.
   const observers = (['upper', 'booster'] as const).filter((which) => lander.partMode(which) !== 'destroyed')
     .map((which) => lander.partState(which).position);
@@ -418,7 +245,7 @@ function render(): void {
   const selection = terrainView.update(observers, p);
   timePhase('lod', performance.now() - lodStarted);
   logLod(selection);
-  syncColliderLines(p);
+  colliderLines.sync(lander.contactWorlds(), p);
   updatePrediction();
   if (pathLine) {
     pathLine.visible = prediction !== null;

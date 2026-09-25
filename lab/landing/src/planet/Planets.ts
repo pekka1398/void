@@ -1,4 +1,5 @@
-import { GRAVITATIONAL_CONSTANT, type SystemSpec } from '../orbitCore';
+import { buildSystem, Ephemeris, GRAVITATIONAL_CONSTANT, suggestedStepSeconds, type SystemSpec } from '../orbitCore';
+import { SYSTEM_PRESETS } from '../../../orbit/src/app/SystemPresets';
 import { terrainFromConfig, type TerrainConfig } from '../terrain/TerrainConfig';
 import type { Terrain } from '../terrain/Surface';
 
@@ -67,7 +68,40 @@ export function earthSize(): LandingPlanet {
     rotationPeriodSeconds: 86_164.1, terrain: { maxHeightMeters: 8000, wavelengthMeters: 40_000, octaves: 8 } });
 }
 
-export const PLANETS = { pebble, luna: moonSize, terra: earthSize } as const;
+/**
+ * The orbit lab's Earth analogue inside its full solar system (Sun, planets,
+ * moons, axial tilt), with terra's placeholder hills: landing here feels the
+ * Sun's and Selene's tides and orbits among real neighbours.
+ */
+export function aurelia(): LandingPlanet {
+  const system = SYSTEM_PRESETS.sol;
+  const body = buildSystem(system).bodies.find((b) => b.id === 'aurelia');
+  if (!body) throw new Error('Planets.ts: the sol preset has no aurelia');
+  const terrainConfig: TerrainConfig = { kind: 'hills', options: { name: 'Aurelia hills', radiusMeters: body.radiusMeters,
+    maxHeightMeters: 8000, wavelengthMeters: 40_000, octaves: 8 } };
+  const gravity = body.gm / body.radiusMeters ** 2;
+  return {
+    label: `AURELIA · SOL SYSTEM · ${(body.radiusMeters / 1e3).toFixed(0)} km RADIUS · ${gravity.toFixed(2)} m/s² · ${(body.rotation.periodSeconds / 3600).toFixed(1)} h DAY`,
+    bodyId: body.id, system, terrainConfig, terrain: terrainFromConfig(terrainConfig),
+  };
+}
+
+export const PLANETS = { pebble, luna: moonSize, terra: earthSize, aurelia } as const;
+
+/**
+ * The planet's system integrated as an ephemeris, and the planet's index in it.
+ * A lone planet has no orbits to size a step from; its ephemeris is trivial
+ * and steps a minute.
+ */
+export function planetEphemeris(planet: LandingPlanet): { ephemeris: Ephemeris; bodyIndex: number } {
+  const system = buildSystem(planet.system);
+  const body = system.bodies.find((b) => b.id === planet.bodyId);
+  if (!body) throw new Error(`Planets.ts: ${planet.bodyId} is not in system ${planet.system.name}`);
+  const stepSeconds = system.bodies.length > 1 ? suggestedStepSeconds(system.bodies, 256) : 60;
+  const ephemeris = new Ephemeris(system, { stepSeconds, chunkSteps: 1024 });
+  ephemeris.extendTo(stepSeconds);
+  return { ephemeris, bodyIndex: body.index };
+}
 export type PlanetId = keyof typeof PLANETS;
 
 export function planetById(id: string): LandingPlanet {

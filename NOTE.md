@@ -1,5 +1,5 @@
 不許在任何地方用任何fallback 該發生的就發生 不該發生的就panic
-每個功能 拆解出來 作一個lab 單獨測試調適通過之後在想辦法串接進去 不使用git branch 取捨用lab(網址參數並排比較 結論寫進lab README) git只在lab階段完成且check通過時在master存檔
+每個功能 拆解出來 作一個lab 單獨測試調適通過之後在想辦法串接進去 git 只用來存檔，不開 branch，取捨用 lab」，
 操作瀏覽器 來驗證lab有沒按照預期工作的由我來
 
 

@@ -96,9 +96,9 @@ export class PartJointRocket {
   private readonly rapier: Rapier;
   private readonly propagator: VesselPropagator;
 
-  private constructor(rapier: Rapier, ephemeris: Ephemeris, terrain: Terrain, fullSpec: LanderSpec, upperSpec: LanderSpec,
+  private constructor(rapier: Rapier, ephemeris: Ephemeris, bodyIndex: number, terrain: Terrain, fullSpec: LanderSpec, upperSpec: LanderSpec,
     boosterSpec: LanderSpec, options: LanderOptions, direction: Vec3) {
-    this.frame = new PlanetFrame(ephemeris, 0);
+    this.frame = new PlanetFrame(ephemeris, bodyIndex);
     this.propagator = new VesselPropagator(ephemeris, options.tolerances);
     this.rapier = rapier;
     this.terrain = terrain;
@@ -139,9 +139,10 @@ export class PartJointRocket {
     this.joinParts();
   }
 
-  static landed(rapier: Rapier, ephemeris: Ephemeris, terrain: Terrain, fullSpec: LanderSpec, upperSpec: LanderSpec,
+  /** bodyIndex: the planet in the ephemeris the rocket stands on. */
+  static landed(rapier: Rapier, ephemeris: Ephemeris, bodyIndex: number, terrain: Terrain, fullSpec: LanderSpec, upperSpec: LanderSpec,
     boosterSpec: LanderSpec, options: LanderOptions, direction: Vec3): PartJointRocket {
-    return new PartJointRocket(rapier, ephemeris, terrain, fullSpec, upperSpec, boosterSpec, options, direction);
+    return new PartJointRocket(rapier, ephemeris, bodyIndex, terrain, fullSpec, upperSpec, boosterSpec, options, direction);
   }
 
   get time(): number { return this.simTime; }

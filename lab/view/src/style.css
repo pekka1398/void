@@ -1,0 +1,35 @@
+html, body { margin: 0; height: 100%; overflow: hidden; background: #03040a; }
+#app { position: fixed; inset: 0; }
+canvas { display: block; touch-action: none; cursor: grab; }
+canvas:active { cursor: grabbing; }
+#overlay { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+.marker {
+  position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 5px;
+  margin: -4px 0 0 -4px; cursor: pointer; white-space: nowrap;
+  font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: #c9d3e6;
+}
+.marker i { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 0 1px #0008; }
+.marker.star span { color: #ffe7b0; }
+.marker.vessel i { border-radius: 0; transform: rotate(45deg); }
+.marker.vessel span { color: #7dffb0; }
+.marker.event i { width: 6px; height: 6px; }
+.marker.event span { color: #9fdcff; }
+.marker.crowded span { display: none; }
+.panel {
+  position: fixed; top: 12px; left: 12px; width: 340px; max-height: calc(100% - 24px); overflow: auto;
+  padding: 10px 12px; background: rgba(8, 10, 16, 0.88); border: 1px solid #2a3040; border-radius: 6px;
+  color: #cfd6e4; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.panel .title { font-weight: 700; letter-spacing: 0.12em; color: #fff; margin-bottom: 4px; }
+.panel .title small { font-weight: 400; letter-spacing: 0; color: #8892a6; }
+.panel label { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 3px 0; }
+.panel label.check { justify-content: flex-start; }
+.panel select { background: #141925; color: #dfe6f3; border: 1px solid #333c52; border-radius: 3px; font: inherit; max-width: 230px; }
+.panel pre { margin: 6px 0; white-space: pre-wrap; color: #e6ecf6; }
+.panel pre.status { color: #fff; }
+.panel .help { color: #8892a6; margin-top: 6px; }
+kbd { padding: 0 4px; border: 1px solid #3a4256; border-radius: 3px; color: #9fb0d0; font-size: 11px; }
+.panic {
+  position: fixed; inset: 12px; z-index: 9999; overflow: auto; margin: 0; padding: 20px;
+  background: #260d14; color: #ffe0e5; white-space: pre-wrap; font: 12px/1.4 ui-monospace, monospace;
+}

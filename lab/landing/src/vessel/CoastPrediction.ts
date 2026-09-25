@@ -1,10 +1,17 @@
-import { PropagationRun, VesselPropagator, type Ephemeris, type Tolerances, type Vec3 } from '../orbitCore';
+import { PropagationRun, Trajectory, VesselPropagator, type Ephemeris, type Tolerances, type Vec3 } from '../orbitCore';
 import { PlanetFrame, type FrameState } from '../physics/PlanetFrame';
 import type { Terrain } from '../terrain/Surface';
 
 export interface CoastPrediction {
+  /** Body-fixed positions, ending at the terrain crossing when there is one. */
   points: { time: number; position: Vec3 }[];
   impact: { time: number; position: Vec3 } | null;
+  /**
+   * The same coast as barycentric inertial integrator samples (for map views
+   * and apsides). It ends at the first step past the terrain crossing, at
+   * most one sampling interval (about a second near the ground) beyond it.
+   */
+  trajectory: Trajectory;
 }
 
 function clearance(state: FrameState, terrain: Terrain): number {
@@ -16,17 +23,18 @@ function clearance(state: FrameState, terrain: Terrain): number {
 /** Coast from the current state through orbit physics, stopping at the sampled terrain. */
 export function predictCoast(ephemeris: Ephemeris, frame: PlanetFrame, terrain: Terrain, tolerances: Tolerances,
   time: number, state: FrameState, massKg: number, horizonSeconds = 1200): CoastPrediction {
-  const result: CoastPrediction = { points: [{ time, position: { ...state.position } }], impact: null };
-  if (clearance(state, terrain) <= 0) return result;
+  const result: CoastPrediction = { points: [{ time, position: { ...state.position } }], impact: null, trajectory: new Trajectory() };
   const inertial = frame.toInertial(time, state);
   const run = new PropagationRun({ time, ...inertial, massKg });
+  result.trajectory.append(time, run.y);
+  if (clearance(state, terrain) <= 0) return result;
   const propagator = new VesselPropagator(ephemeris, tolerances);
   let previous = state;
   let previousTime = time;
   const end = time + horizonSeconds;
   while (run.time < end - 1e-8) {
     const h = Math.max(1, Math.min(15, clearance(previous, terrain) / Math.max(1, Math.hypot(previous.velocity.x, previous.velocity.y, previous.velocity.z))));
-    const outcome = propagator.advance(run, Math.min(end, run.time + h), 10000, null, null);
+    const outcome = propagator.advance(run, Math.min(end, run.time + h), 10000, result.trajectory, null);
     if (outcome.kind === 'budget') throw new Error('coast prediction step budget exhausted');
     const now = frame.toBodyFixed(run.time, run.state);
     const nextClearance = clearance(now, terrain);

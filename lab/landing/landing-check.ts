@@ -10,7 +10,7 @@ import { predictCoast } from './src/vessel/CoastPrediction';
 import { ANGULAR_DAMPING, ContactWorld, type ContactWorldOptions } from './src/physics/ContactWorld';
 import { PlanetFrame, type FrameState } from './src/physics/PlanetFrame';
 import type { Terrain } from './src/terrain/Surface';
-import { PLANETS, pebble } from './src/planet/Planets';
+import { PLANETS, pebble, planetEphemeris } from './src/planet/Planets';
 import { cubeToSphere, FACE_EDGES, neighborKey, PlanetLod, sphereToCube, tileContaining, tileId, tilesAround, type TileMeshData } from './src/lodCore';
 import { landingLodOptions } from './src/terrain/TerrainView';
 import { terrainFromConfig } from './src/terrain/TerrainConfig';
@@ -501,7 +501,7 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
   const booster: LanderSpec = { thrustNewtons: 28000, specificImpulseSeconds: 280, dryMassKg: 500, fuelMassKg: 900,
     halfExtents: { x: 1, y: 1.35, z: 1 }, friction: 0.8, contactShape: { kind: 'box', halfExtents: { x: 1, y: 1.35, z: 1 } }, crashToleranceMetersPerSecond: 10 };
   const full: LanderSpec = { ...booster, dryMassKg: 1000, fuelMassKg: 900, halfExtents: { x: 1, y: 2.05, z: 1 } };
-  const rocket = PartJointRocket.landed(RAPIER, env.ephemeris, env.terrain, full, upper, booster, LANDER_OPTIONS, LAUNCH_SITE);
+  const rocket = PartJointRocket.landed(RAPIER, env.ephemeris, 0, env.terrain, full, upper, booster, LANDER_OPTIONS, LAUNCH_SITE);
   rocket.advance(1, COAST);
   const upperBody = rocket.upper, boosterBody = rocket.booster;
   const upperCollider = upperBody.collider(0), boosterCollider = boosterBody.collider(0);
@@ -523,7 +523,7 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
     `joint 1 -> 0; same bodies/colliders ${sameBodies}; position jump ${fmt(positionJump)} m; momentum jump ${fmt(momentumJump)} kg·m/s`);
   rocket.free();
 
-  const powered = PartJointRocket.landed(RAPIER, env.ephemeris, env.terrain, full, upper, booster, LANDER_OPTIONS, LAUNCH_SITE);
+  const powered = PartJointRocket.landed(RAPIER, env.ephemeris, 0, env.terrain, full, upper, booster, LANDER_OPTIONS, LAUNCH_SITE);
   powered.advance(3, UP);
   const joinedDistance = distance(powered.partState('upper').position, powered.partState('booster').position);
   const burned = booster.fuelMassKg - powered.fuelKg;
@@ -536,7 +536,7 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
     `attached distance ${joinedDistance.toFixed(3)} m, burned ${burned.toFixed(1)} kg, one second after release gap ${distanceAfter.toFixed(3)} m`);
   powered.free();
 
-  const hybrid = PartJointRocket.landed(RAPIER, env.ephemeris, env.terrain, full, upper, booster, LANDER_OPTIONS, LAUNCH_SITE);
+  const hybrid = PartJointRocket.landed(RAPIER, env.ephemeris, 0, env.terrain, full, upper, booster, LANDER_OPTIONS, LAUNCH_SITE);
   hybrid.advance(15, UP);
   const reachedOrbitMode = hybrid.mode === 'flight' && hybrid.modeChanges[0]?.from === 'contact' && hybrid.modeChanges[0]?.to === 'flight';
   hybrid.separate();
@@ -551,7 +551,7 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
   hybrid.free();
 
   // Staged in flight, the spent booster falls back into Rapier on its own while the burning upper stage stays in orbit mode.
-  const split = PartJointRocket.landed(RAPIER, env.ephemeris, env.terrain, full, upper, booster, LANDER_OPTIONS, LAUNCH_SITE);
+  const split = PartJointRocket.landed(RAPIER, env.ephemeris, 0, env.terrain, full, upper, booster, LANDER_OPTIONS, LAUNCH_SITE);
   split.crashDetection = true;
   split.advance(15, UP);
   split.separate();
@@ -576,7 +576,7 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
     `booster ${split.partMode('booster')} after ${fell}s in contact (speed change ${crash ? crash.deltaV.toFixed(1) : '—'} m/s); upper ${split.mode}`);
   split.free();
 
-  const settled = PartJointRocket.landed(RAPIER, env.ephemeris, env.terrain, full, upper, booster, LANDER_OPTIONS, LAUNCH_SITE);
+  const settled = PartJointRocket.landed(RAPIER, env.ephemeris, 0, env.terrain, full, upper, booster, LANDER_OPTIONS, LAUNCH_SITE);
   settled.crashDetection = true;
   settled.advance(5, COAST);
   const settleDeltaV = Math.max(settled.world.lastContactDeltaV(settled.upper), settled.world.lastContactDeltaV(settled.booster));
@@ -623,7 +623,7 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
   // B + C. Steering above the contact band, and angular velocity carried across both hand-offs.
   {
     const steer = { ...UP, turn: { x: 0.05, y: 0, z: 0 } };
-    const craft = PartJointRocket.landed(RAPIER, env.ephemeris, env.terrain, full, upper, booster, LANDER_OPTIONS, LAUNCH_SITE);
+    const craft = PartJointRocket.landed(RAPIER, env.ephemeris, 0, env.terrain, full, upper, booster, LANDER_OPTIONS, LAUNCH_SITE);
     const dt = CONTACT_OPTIONS.stepSeconds;
     // Climb straight to just below the band exit, then steer lightly across it one physics step at a time.
     for (let g = 0; craft.mode === 'contact' && craft.clearance() < LANDER_OPTIONS.bandExitMeters - 60 && g < 60 * 40; g += 1) craft.advance(dt, UP);
@@ -759,9 +759,7 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
 // === Every planet: launch, orbital flight, and back into the contact band =============
 for (const [planetId, make] of Object.entries(PLANETS)) {
   const planet = make();
-  const system = buildSystem(planet.system);
-  const ephemeris = new Ephemeris(system, { stepSeconds: 60, chunkSteps: 1024 });
-  ephemeris.extendTo(60);
+  const { ephemeris, bodyIndex } = planetEphemeris(planet);
   const contact = { ...CONTACT_OPTIONS, tileLevel: levelForTileSize(planet.terrain.radiusMeters, TILE_SIZE_METERS) };
   const options: LanderOptions = { ...LANDER_OPTIONS, contact };
   const upper: LanderSpec = { thrustNewtons: 8000, specificImpulseSeconds: 330, dryMassKg: 300, fuelMassKg: 200,
@@ -769,13 +767,13 @@ for (const [planetId, make] of Object.entries(PLANETS)) {
   const booster: LanderSpec = { thrustNewtons: 28000, specificImpulseSeconds: 280, dryMassKg: 500, fuelMassKg: 900,
     halfExtents: { x: 1, y: 1.35, z: 1 }, friction: 0.8, contactShape: { kind: 'box', halfExtents: { x: 1, y: 1.35, z: 1 } }, crashToleranceMetersPerSecond: 10 };
   const full: LanderSpec = { ...booster, dryMassKg: 1000, fuelMassKg: 900, halfExtents: { x: 1, y: 2.05, z: 1 } };
-  const rocket = PartJointRocket.landed(RAPIER, ephemeris, planet.terrain, full, upper, booster, options, LAUNCH_SITE);
+  const rocket = PartJointRocket.landed(RAPIER, ephemeris, bodyIndex, planet.terrain, full, upper, booster, options, LAUNCH_SITE);
   rocket.advance(2, COAST);
   rocket.advance(20, UP);
   let peak = rocket.clearance();
   for (let g = 0; rocket.mode === 'flight' && g < 4000; g += 1) { rocket.advance(0.5, COAST); peak = Math.max(peak, rocket.clearance()); }
   // A vertical burn at the stack's initial thrust-to-weight reaches at least this height; a stack that bends or tips does not.
-  const gravity = planet.system.root.massKg * 6.6743e-11 / planet.terrain.radiusMeters ** 2;
+  const gravity = ephemeris.bodies[bodyIndex]!.gm / planet.terrain.radiusMeters ** 2;
   const burnOnly = 0.5 * (booster.thrustNewtons / (full.dryMassKg + full.fuelMassKg) - gravity) * 20 ** 2;
   const changes = rocket.modeChanges;
   const ok = changes[0]?.from === 'contact' && changes[0]?.to === 'flight' && changes[1]?.from === 'flight' && changes[1]?.to === 'contact' && peak > 0.9 * burnOnly;

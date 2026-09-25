@@ -23,6 +23,16 @@ npm run dev        # interactive page
 
 - `pebble` (`src/planet/Planets.ts`): 100 km radius and a Moon-like 1.6 m/s² surface gravity, which makes it far denser than real rock. A 3.5 h spin moves the equator at 50 m/s, so rotating-frame effects are large enough to test. Placeholder hills reach up to 3 km.
 - The checks also run at Earth size (6371 km), so precision problems show up early.
+- `aurelia`: the orbit lab's Earth analogue inside its full sol system, with the Sun, the planets and Selene, a 23.4° axial tilt, and terra's placeholder hills. It is the first planet that is not alone: the rocket stands on body `bodyIndex` of a many-body ephemeris, and the rotating frame carries the Sun's and Selene's tides. `planetEphemeris(planet)` builds any planet's ephemeris and returns its index. A lone planet steps one minute; a system uses the orbit lab's suggested step. The per-planet launch-and-return and drawn-equals-collision checks cover it like the others.
+
+## Shared with lab/flight
+
+lab/flight imports these instead of copying them:
+
+- `vessel/DemoRocket.ts`: the two-stage rocket's collider shapes, masses and contact options, sized to the planet.
+- `render/RocketVisual.ts`: its meshes, engine plumes and collider outlines.
+- `vessel/CoastPrediction.ts`: `predictCoast`, whose result also carries the coast as a barycentric inertial `Trajectory`, for map paths and apsides. That trajectory ends at most one sample past the terrain crossing.
+- `PartJointRocket.landed(rapier, ephemeris, bodyIndex, ...)` now takes the planet's index in the ephemeris instead of assuming body 0.
 
 ## Terrain tiles (`src/terrain/TerrainTiles.ts`, `TerrainView.ts`)
 
