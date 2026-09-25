@@ -56,6 +56,26 @@ A list of burns, each a Δv along prograde, normal and radial relative to a chos
 | P2 | Viewer: system, trajectories, time warp, reference frames | done |
 | P3 | Vessel control, finite burns, prediction | done |
 | P4 | Flight plan: burns, plan trajectory, execution | done |
+| P5 | Realism: all planets, tidally locked moons, IAU spin axes, J2 for vessels | done |
+
+The lab is paused here: nothing known is broken, and the next step is either another lab or merging this one into the game.
+
+### Not modelled
+
+- The massive bodies attract one another as point masses. J2 acts only on vessels, so the moons' orbits do not precess from their planet's bulge.
+- Surfaces are spheres, and there is no atmosphere or drag. Lunar mascons are missing, so low lunar orbits are more stable than they really are.
+- Spin axes are fixed in inertial space, with no precession or nutation.
+- Attitude is ideal: thrust points exactly where commanded, with no turn time or rotational inertia.
+- The start epoch is J2000-like, not an exact date.
+
+### Open ideas (not scheduled)
+
+- Hide Pe/Ap markers on near-circular orbits, for example when Ap − Pe < 1 km.
+- Move throttle-down off `Ctrl`, so a slip can't trigger `Ctrl+W`.
+- Optionally draw each slow planet's current orbit as a full ellipse.
+- Make the engine parameters (thrust, Isp, masses) editable on the page.
+- A closest-approach marker for the plan's target.
+- Measure warp performance in a real browser (headless Chrome lags at 1e7× in low orbit).
 
 ## Core (`src/orbit/`)
 
