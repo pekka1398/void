@@ -5,7 +5,7 @@ This is an independent browser experiment for planet mesh generation, tile seams
 The browser renderer explicitly uses Three.js's WebGL2 backend. It never switches renderer backends at runtime. An unavailable backend or an invalid geometry/LOD state stops the lab and displays an error with a stack trace.
 
 ```sh
-cd lod-lab
+cd lab/lod
 npm ci
 npm run dev
 ```
