@@ -1,7 +1,10 @@
 import type { Vec3 } from './Vec3';
 import { cubeToSphere } from './CubeSphere';
+import { FACE_FRAMES } from './CubeSphere';
 import { CUBE_FACES, childKeys, rootKey, tileId, tileUvBounds, type TileKey } from './TileKey';
-import type { TileMeshData } from './TileMeshBuilder';
+import { FACE_EDGES } from './FaceAdjacency';
+import { selectedNeighbor } from './TileNeighbors';
+import { tileBufferBytes, type TileMeshData } from './TileMeshBuilder';
 
 export interface TileRequest {
   readonly key: TileKey;
@@ -11,27 +14,33 @@ export interface TileRequest {
 
 export interface PlanetLodOptions {
   readonly radiusMeters: number;
-  /** Conservative bounds for a tile whose data does not exist yet. */
+  /** Declared terrain range for validation and a global horizon bound. */
   readonly minSurfaceHeightMeters: number;
   readonly maxSurfaceHeightMeters: number;
   /** Surface radius nothing can be seen through; used for horizon culling. */
   readonly occluderRadiusMeters: number;
+  /** Fixed outward band ignored by the LOD distance test; never sampled from terrain. */
+  readonly lodSurfaceBandMeters: number;
   readonly resolution: number;
   readonly maxLevel: number;
+  /** Split distance at each level, divided by the reference radius. */
+  readonly splitDistanceRatios: readonly number[];
   /** Tiles with no use for this many selections may be evicted. */
   readonly retainFrames?: number;
   readonly maxCachedTiles?: number;
 }
 
+/** HolmanDev Planet.cs distance table (Size = 1,000,000), normalized by Size. */
+export const HOLMAN_SPLIT_DISTANCE_RATIOS: readonly number[] = [
+  Infinity, Infinity, Infinity, 0.45, 0.2, 0.1, 0.05, 0.03,
+  0.016, 0.008, 0.004, 0.0023, 0.0014, 0.00075, 0.0005, 0.0003,
+];
+
 export interface LodView {
-  /** Body-fixed camera position in meters. */
-  readonly cameraPosition: Vec3;
-  readonly viewportHeightPixels: number;
-  readonly fovYRadians: number;
-  readonly maxScreenErrorPixels: number;
+  /** Body-fixed observation point in meters, independent of the viewing camera. */
+  readonly observerPosition: Vec3;
+  readonly distanceScale: number;
   readonly horizonCulling: boolean;
-  /** Optional frustum test on a body-fixed bounding sphere. */
-  readonly isSphereVisible?: (center: Vec3, radius: number) => boolean;
 }
 
 export interface LodNode {
@@ -39,20 +48,20 @@ export interface LodNode {
   readonly id: string;
   readonly parent: LodNode | undefined;
   children: [LodNode, LodNode, LodNode, LodNode] | undefined;
-  /** Body-fixed bounding sphere; tightened once data arrives. */
-  boundCenter: Vec3;
-  boundRadius: number;
-  /** Sample directions used for horizon culling (corners, edge midpoints, center). */
-  readonly probeDirections: readonly Vec3[];
-  minHeight: number;
-  maxHeight: number;
+  /** Fixed reference-sphere center used only for LOD distance. */
+  readonly lodCenter: Vec3;
+  readonly lodAxisU: Vec3;
+  readonly lodAxisV: Vec3;
+  readonly centerDirection: Vec3;
+  /** Conservative angular cap for this UV patch, independent of terrain mesh. */
+  readonly angularRadius: number;
   data: TileMeshData | undefined;
   lastUsedFrame: number;
   /** Diagnostics from the most recent selection. */
-  screenErrorPixels: number;
+  splitPriority: number;
 }
 
-export type CullReason = 'frustum' | 'horizon';
+export type CullReason = 'horizon';
 
 export interface LodSelection {
   readonly frame: number;
@@ -62,12 +71,13 @@ export interface LodSelection {
   /** Nodes drawn at a finer level than wanted because their own data was missing. */
   readonly visited: number;
   readonly selectMilliseconds: number;
+  readonly traversalMilliseconds: number;
+  readonly balanceMilliseconds: number;
+  readonly evictionMilliseconds: number;
 }
 
-const PROBE_GRID = [0, 0.5, 1];
-
 /**
- * Cube-sphere quadtree with screen-space-error refinement.
+ * Cube-sphere quadtree with per-level distance thresholds.
  *
  * Invariants:
  *  - A node is only replaced by its children once all four visible children
@@ -81,49 +91,68 @@ export class PlanetLod {
   private readonly retainFrames: number;
   private readonly maxCachedTiles: number;
   private readyCount = 0;
+  private readyMeshBytes = 0;
+  /** Worker jobs must keep their node alive until the response is accepted. */
+  private readonly pinnedBuilds = new Set<string>();
 
   constructor(readonly options: PlanetLodOptions) {
+    if (!Number.isFinite(options.radiusMeters) || options.radiusMeters <= 0 ||
+      !Number.isFinite(options.occluderRadiusMeters) || options.occluderRadiusMeters <= 0 ||
+      !Number.isFinite(options.maxSurfaceHeightMeters) ||
+      !Number.isFinite(options.lodSurfaceBandMeters) || options.lodSurfaceBandMeters < 0 ||
+      options.lodSurfaceBandMeters > options.maxSurfaceHeightMeters ||
+      options.radiusMeters + options.maxSurfaceHeightMeters < options.occluderRadiusMeters) {
+      throw new Error(`PlanetLod.ts: invalid radii or LOD surface band; radius=${options.radiusMeters}; occluder=${options.occluderRadiusMeters}; globalMaxHeight=${options.maxSurfaceHeightMeters}; lodSurfaceBand=${options.lodSurfaceBandMeters}`);
+    }
+    if (!Number.isInteger(options.maxLevel) || options.maxLevel < 0 || options.splitDistanceRatios.length < options.maxLevel) {
+      throw new Error(`PlanetLod.ts: invalid split distance table; maxLevel=${options.maxLevel}; ratios=${options.splitDistanceRatios.length}`);
+    }
+    for (let level = 0; level < options.maxLevel; level++) {
+      const ratio = options.splitDistanceRatios[level];
+      if (!(ratio > 0)) throw new Error(`PlanetLod.ts: invalid split distance ratio; level=${level}; ratio=${ratio}`);
+    }
     this.retainFrames = options.retainFrames ?? 90;
     this.maxCachedTiles = options.maxCachedTiles ?? 2_500;
     this.roots = CUBE_FACES.map((face) => this.createNode(rootKey(face), undefined));
   }
 
   get cachedTileCount(): number { return this.readyCount; }
+  get cachedMeshBytes(): number { return this.readyMeshBytes; }
   get nodeCount(): number { return this.nodes.size; }
 
   getNode(id: string): LodNode | undefined { return this.nodes.get(id); }
+
+  pinBuild(id: string): void {
+    const node = this.nodes.get(id);
+    if (!node) throw new Error(`PlanetLod.ts pinBuild: request has no node; id=${id}; frame=${this.frame}; nodes=${this.nodes.size}`);
+    if (node.data) throw new Error(`PlanetLod.ts pinBuild: request already has mesh; id=${id}; frame=${this.frame}`);
+    if (this.pinnedBuilds.has(id)) throw new Error(`PlanetLod.ts pinBuild: duplicate in-flight job; id=${id}; frame=${this.frame}`);
+    this.pinnedBuilds.add(id);
+  }
+
+  unpinBuild(id: string): void {
+    if (!this.pinnedBuilds.delete(id)) throw new Error(`PlanetLod.ts unpinBuild: job was not pinned; id=${id}; frame=${this.frame}`);
+    if (!this.nodes.get(id)?.data) throw new Error(`PlanetLod.ts unpinBuild: accepted mesh is missing; id=${id}; frame=${this.frame}`);
+  }
 
   /** Nominal grid spacing at a level, meters. */
   spacingMeters(level: number): number {
     return this.options.radiusMeters * (Math.PI / 2) / 2 ** level / (this.options.resolution - 1);
   }
 
-  /** Geometric error used for refinement. Measured when data exists, else a spacing estimate. */
-  geometricErrorMeters(node: LodNode): number {
-    const spacing = this.spacingMeters(node.key.level);
-    // Floor: detail smaller than one grid cell cannot be measured by the tile itself.
-    const floor = spacing * 0.01;
-    if (!node.data) throw new Error(`PlanetLod.ts geometricErrorMeters: no mesh for id=${node.id}; frame=${this.frame}; level=${node.key.level}`);
-    return Math.max(node.data.errorMeters, floor);
-  }
-
   acceptTile(tile: TileMeshData): void {
     const node = this.nodes.get(tile.id);
     if (!node) throw new Error(`PlanetLod.ts acceptTile: unknown tile id=${tile.id}; key=${JSON.stringify(tile.key)}; frame=${this.frame}; nodes=${this.nodes.size}`);
-    if (!node.data) this.readyCount++;
-    node.data = tile;
-    node.minHeight = tile.minHeightMeters;
-    node.maxHeight = tile.maxHeightMeters;
-    this.updateBounds(node);
-    // Children inherit a tighter conservative range than the global one.
-    if (node.children) {
-      for (const child of node.children) {
-        if (child.data) continue;
-        child.minHeight = Math.max(this.options.minSurfaceHeightMeters, tile.minHeightMeters - tile.errorMeters);
-        child.maxHeight = Math.min(this.options.maxSurfaceHeightMeters, tile.maxHeightMeters + tile.errorMeters);
-        this.updateBounds(child);
-      }
+    if (!Number.isFinite(tile.minHeightMeters) || !Number.isFinite(tile.maxHeightMeters) ||
+      tile.minHeightMeters < this.options.minSurfaceHeightMeters || tile.maxHeightMeters > this.options.maxSurfaceHeightMeters ||
+      tile.minHeightMeters > tile.maxHeightMeters) {
+      throw new Error(`PlanetLod.ts acceptTile: tile exceeds declared terrain bounds; id=${tile.id}; tileMin=${tile.minHeightMeters}; tileMax=${tile.maxHeightMeters}; declaredMin=${this.options.minSurfaceHeightMeters}; declaredMax=${this.options.maxSurfaceHeightMeters}`);
     }
+    if (!node.data) this.readyCount++;
+    else this.readyMeshBytes -= tileBufferBytes(node.data);
+    node.data = tile;
+    this.readyMeshBytes += tileBufferBytes(tile);
+    node.lastUsedFrame = this.frame;
   }
 
   select(view: LodView): LodSelection {
@@ -131,26 +160,33 @@ export class PlanetLod {
     this.frame++;
     const render: LodNode[] = [];
     const requests = new Map<string, TileRequest>();
-    const culled: Record<CullReason, number> = { frustum: 0, horizon: 0 };
+    const culled: Record<CullReason, number> = { horizon: 0 };
     let visited = 0;
-    const pixelsPerMeterAtUnitDistance = view.viewportHeightPixels / (2 * Math.tan(view.fovYRadians / 2));
+    if (!Number.isFinite(view.distanceScale) || view.distanceScale <= 0) {
+      throw new Error(`PlanetLod.ts select: invalid distance scale=${view.distanceScale}; frame=${this.frame}`);
+    }
 
     const request = (node: LodNode, priority: number) => {
       if (!node.data && !requests.has(node.id)) requests.set(node.id, { key: node.key, priority });
     };
 
     const cullReason = (node: LodNode): CullReason | undefined => {
-      if (view.isSphereVisible && !view.isSphereVisible(node.boundCenter, node.boundRadius)) return 'frustum';
-      if (view.horizonCulling && this.belowHorizon(node, view.cameraPosition)) return 'horizon';
+      if (view.horizonCulling && this.belowHorizon(node, view.observerPosition)) return 'horizon';
       return undefined;
     };
 
-    const screenError = (node: LodNode) => {
-      const distance = Math.max(
-        1e-3,
-        distance3(view.cameraPosition, node.boundCenter) - node.boundRadius,
-      );
-      return this.geometricErrorMeters(node) * pixelsPerMeterAtUnitDistance / distance;
+    const distanceToPatch = (node: LodNode) => {
+      const delta = {
+        x: view.observerPosition.x - node.lodCenter.x,
+        y: view.observerPosition.y - node.lodCenter.y,
+        z: view.observerPosition.z - node.lodCenter.z,
+      };
+      const halfSide = this.options.radiusMeters / 2 ** node.key.level;
+      const u = Math.max(0, Math.abs(dot3(delta, node.lodAxisU)) - halfSide);
+      const v = Math.max(0, Math.abs(dot3(delta, node.lodAxisV)) - halfSide);
+      const normal = node.centerDirection;
+      const radial = Math.max(0, Math.abs(dot3(delta, normal)) - this.options.lodSurfaceBandMeters);
+      return Math.hypot(u, v, radial);
     };
 
     const visit = (node: LodNode) => {
@@ -162,11 +198,13 @@ export class PlanetLod {
         return;
       }
       if (!node.data) throw new Error(`PlanetLod.ts visit: visible node has no mesh; id=${node.id}; frame=${this.frame}; parent=${node.parent?.id ?? 'root'}`);
-      const error = screenError(node);
-      node.screenErrorPixels = error;
-      const wantsSplit = error > view.maxScreenErrorPixels && node.key.level < this.options.maxLevel;
+      const distance = distanceToPatch(node);
+      const threshold = node.key.level < this.options.maxLevel
+        ? this.options.radiusMeters * this.options.splitDistanceRatios[node.key.level] * view.distanceScale : 0;
+      node.splitPriority = threshold - distance;
+      const wantsSplit = distance < threshold && node.key.level < this.options.maxLevel;
       if (!wantsSplit) {
-        if (!node.data) throw new Error(`PlanetLod.ts select: selected tile has no mesh; id=${node.id}; frame=${this.frame}; level=${node.key.level}; errorPixels=${error}; threshold=${view.maxScreenErrorPixels}`);
+        if (!node.data) throw new Error(`PlanetLod.ts select: selected tile has no mesh; id=${node.id}; frame=${this.frame}; level=${node.key.level}; patchDistance=${distance}; threshold=${threshold}`);
         render.push(node);
         return;
       }
@@ -178,14 +216,14 @@ export class PlanetLod {
         // A child we cannot see does not need to exist before we split.
         if (cullReason(child)) continue;
         ready = false;
-        request(child, error);
+        request(child, node.splitPriority);
       }
       if (ready) {
         for (const child of children) visit(child);
       } else {
         // Keeping a ready parent visible while its children build is the
         // defined split transition, not recovery from an invalid state.
-        if (!node.data) throw new Error(`PlanetLod.ts select: split parent has no mesh; id=${node.id}; frame=${this.frame}; readyChildren=${children.filter((child) => !!child.data).length}/4; errorPixels=${error}`);
+        if (!node.data) throw new Error(`PlanetLod.ts select: split parent has no mesh; id=${node.id}; frame=${this.frame}; readyChildren=${children.filter((child) => !!child.data).length}/4; patchDistance=${distance}; threshold=${threshold}`);
         render.push(node);
       }
     };
@@ -197,15 +235,81 @@ export class PlanetLod {
       for (const root of this.roots) visit(root);
     }
 
-    this.evict();
+    const traversalFinished = performance.now();
+    const balanced = this.balanceSelection(render, requests);
+    const balanceFinished = performance.now();
+    const renderedIds = new Set(balanced.map((node) => node.id));
+    for (const node of balanced) node.lastUsedFrame = this.frame;
+    this.evict(renderedIds);
+    const finished = performance.now();
     return {
       frame: this.frame,
-      render,
+      render: balanced,
       requests: [...requests.values()],
       culled,
       visited,
-      selectMilliseconds: performance.now() - started,
+      selectMilliseconds: finished - started,
+      traversalMilliseconds: traversalFinished - started,
+      balanceMilliseconds: balanceFinished - traversalFinished,
+      evictionMilliseconds: finished - balanceFinished,
     };
+  }
+
+  /** Refine coarse neighbors when ready; otherwise request them and temporarily coarsen the fine side. */
+  private balanceSelection(render: readonly LodNode[], requests: Map<string, TileRequest>): LodNode[] {
+    const selected = new Map(render.map((node) => [node.id, node]));
+    let refining = true;
+    for (let pass = 0; pass < 10_000; pass++) {
+      const collapse = new Map<string, LodNode>();
+      const split = new Map<string, [LodNode, LodNode, LodNode, LodNode]>();
+      for (const node of selected.values()) {
+        for (const edge of FACE_EDGES) {
+          const neighbor = selectedNeighbor(selected, node.key, edge);
+          if (neighbor && node.key.level - neighbor.key.level > 1) {
+            const children = refining ? this.ensureChildren(neighbor) : neighbor.children;
+            if (refining && children?.every((child) => !!child.data)) split.set(neighbor.id, children);
+            else {
+              if (refining && children) for (const child of children) {
+                if (!child.data && !requests.has(child.id)) requests.set(child.id, { key: child.key, priority: node.splitPriority });
+              }
+              const parent = node.parent;
+              if (!parent?.data) throw new Error(`PlanetLod.ts balanceSelection: fine tile has no ready parent; tile=${node.id}; edge=${edge}; neighbor=${neighbor.id}; frame=${this.frame}`);
+              collapse.set(parent.id, parent);
+            }
+          }
+        }
+      }
+      if (split.size === 0 && refining) {
+        // A stable selection needs neither the collapse pass nor another full
+        // neighbor scan. At high tile counts this was repeating the dominant work.
+        if (collapse.size === 0) return [...selected.values()];
+        refining = false;
+        continue;
+      }
+      if (collapse.size === 0 && split.size === 0) return [...selected.values()];
+      for (const [id, children] of split) {
+        if (!selected.delete(id)) continue;
+        for (const child of children) selected.set(child.id, child);
+      }
+      if (refining) continue;
+      for (const parent of [...collapse.values()].sort((a, b) => a.key.level - b.key.level)) {
+        let selectedAncestor = parent.parent;
+        let alreadyCovered = false;
+        while (selectedAncestor) {
+          if (selected.has(selectedAncestor.id)) { alreadyCovered = true; break; }
+          selectedAncestor = selectedAncestor.parent;
+        }
+        if (alreadyCovered) continue;
+        for (const node of selected.values()) {
+          const levelDifference = node.key.level - parent.key.level;
+          if (levelDifference >= 0 && node.key.face === parent.key.face &&
+            Math.floor(node.key.x / 2 ** levelDifference) === parent.key.x &&
+            Math.floor(node.key.y / 2 ** levelDifference) === parent.key.y) selected.delete(node.id);
+        }
+        selected.set(parent.id, parent);
+      }
+    }
+    throw new Error(`PlanetLod.ts balanceSelection: failed to converge; frame=${this.frame}; selected=${selected.size}; maxLevel=${this.options.maxLevel}`);
   }
 
   private ensureChildren(node: LodNode): [LodNode, LodNode, LodNode, LodNode] {
@@ -223,93 +327,62 @@ export class PlanetLod {
 
   private createNode(key: TileKey, parent: LodNode | undefined): LodNode {
     const { u0, v0, u1, v1 } = tileUvBounds(key);
-    const probeDirections: Vec3[] = [];
-    for (const fv of PROBE_GRID) {
-      for (const fu of PROBE_GRID) {
-        probeDirections.push(cubeToSphere(key.face, u0 + (u1 - u0) * fu, v0 + (v1 - v0) * fv));
-      }
-    }
-    const inheritedMin = parent?.data
-      ? Math.max(this.options.minSurfaceHeightMeters, parent.data.minHeightMeters - parent.data.errorMeters)
-      : parent?.minHeight ?? this.options.minSurfaceHeightMeters;
-    const inheritedMax = parent?.data
-      ? Math.min(this.options.maxSurfaceHeightMeters, parent.data.maxHeightMeters + parent.data.errorMeters)
-      : parent?.maxHeight ?? this.options.maxSurfaceHeightMeters;
+    const centerU = (u0 + u1) / 2;
+    const centerV = (v0 + v1) / 2;
+    const centerDirection = cubeToSphere(key.face, centerU, centerV);
+    const lodAxisU = tangentAxis(FACE_FRAMES[key.face].a, centerDirection);
     const node: LodNode = {
       key,
       id: tileId(key),
       parent,
       children: undefined,
-      boundCenter: { x: 0, y: 0, z: 0 },
-      boundRadius: 0,
-      probeDirections,
-      minHeight: inheritedMin,
-      maxHeight: inheritedMax,
+      lodCenter: {
+        x: centerDirection.x * this.options.radiusMeters,
+        y: centerDirection.y * this.options.radiusMeters,
+        z: centerDirection.z * this.options.radiusMeters,
+      },
+      lodAxisU,
+      lodAxisV: cross3(centerDirection, lodAxisU),
+      centerDirection,
+      angularRadius: tileAngularRadius(u0, v0, u1, v1),
       data: undefined,
       lastUsedFrame: this.frame,
-      screenErrorPixels: 0,
+      splitPriority: 0,
     };
-    this.updateBounds(node);
     this.nodes.set(node.id, node);
     return node;
   }
 
   /**
-   * Sphere around the tile's curved shell between min and max height. The
-   * center sits on the tile's center direction; the radius covers the probe
-   * grid at both radii plus the chord sag between probes.
+   * A tile is hidden only when its full direction cap lies beyond the largest
+   * horizon angle allowed by the declared global surface radius. This uses no
+   * per-tile mesh heights or mesh-derived bounds.
    */
-  private updateBounds(node: LodNode): void {
-    const radius = this.options.radiusMeters;
-    const inner = radius + node.minHeight;
-    const outer = radius + node.maxHeight;
-    const center = node.probeDirections[4];
-    const mid = (inner + outer) / 2;
-    node.boundCenter = { x: center.x * mid, y: center.y * mid, z: center.z * mid };
-    let worst = 0;
-    let maxProbeAngle = 0;
-    for (const direction of node.probeDirections) {
-      for (const r of [inner, outer]) {
-        worst = Math.max(worst, distance3(node.boundCenter, {
-          x: direction.x * r, y: direction.y * r, z: direction.z * r,
-        }));
-      }
-      maxProbeAngle = Math.max(maxProbeAngle, Math.acos(clamp(dot3(direction, center), -1, 1)));
-    }
-    // Between probes the shell bulges outward by at most r(1 - cos(half probe spacing)).
-    const sag = outer * (1 - Math.cos(maxProbeAngle / 2));
-    node.boundRadius = worst + sag;
+  private belowHorizon(node: LodNode, observer: Vec3): boolean {
+    const observerRadius = Math.hypot(observer.x, observer.y, observer.z);
+    const occluder = this.options.occluderRadiusMeters;
+    if (!Number.isFinite(observerRadius)) throw new Error(`PlanetLod.ts belowHorizon: invalid observer=${JSON.stringify(observer)}; node=${node.id}`);
+    if (observerRadius <= occluder) return false;
+    const topRadius = this.options.radiusMeters + this.options.maxSurfaceHeightMeters;
+    const horizonAngle = Math.acos(occluder / observerRadius) + Math.acos(occluder / topRadius);
+    const centerAngle = Math.acos(clamp(dot3(observer, node.centerDirection) / observerRadius, -1, 1));
+    return centerAngle - node.angularRadius > horizonAngle;
   }
 
-  /**
-   * Conservative horizon test. Over an occluder of radius Ro, a camera at
-   * radius rc can see a point at radius rp only within
-   * √(rc² − Ro²) + √(rp² − Ro²). No point of the tile is higher than its top
-   * shell or nearer than its bounding sphere, so beyond that range the whole
-   * tile is hidden. Sampling points on the tile instead is not conservative:
-   * a large tile's samples can all be past the horizon while the part under
-   * the camera is not.
-   */
-  private belowHorizon(node: LodNode, camera: Vec3): boolean {
-    const occluderSq = this.options.occluderRadiusMeters ** 2;
-    const cameraHorizonSq = dot3(camera, camera) - occluderSq;
-    if (cameraHorizonSq <= 0) return false;
-    const top = this.options.radiusMeters + node.maxHeight;
-    const reach = Math.sqrt(cameraHorizonSq) + Math.sqrt(Math.max(0, top * top - occluderSq));
-    return distance3(camera, node.boundCenter) - node.boundRadius > reach;
-  }
-
-  private evict(): void {
+  private evict(renderedIds: ReadonlySet<string>): void {
     if (this.readyCount <= this.maxCachedTiles) return;
     const candidates: LodNode[] = [];
     for (const node of this.nodes.values()) {
-      if (node.data && !node.children && node.key.level > 1 && this.frame - node.lastUsedFrame > this.retainFrames) {
+      if (node.data && !node.children && node.key.level > 1 && !renderedIds.has(node.id) &&
+        this.frame - node.lastUsedFrame > this.retainFrames) {
         candidates.push(node);
       }
     }
     candidates.sort((left, right) => left.lastUsedFrame - right.lastUsedFrame);
     for (const node of candidates) {
       if (this.readyCount <= this.maxCachedTiles * 0.85) break;
+      if (!node.data) throw new Error(`PlanetLod.ts evict: selected candidate lost mesh; id=${node.id}; frame=${this.frame}`);
+      this.readyMeshBytes -= tileBufferBytes(node.data);
       node.data = undefined;
       this.readyCount--;
     }
@@ -319,13 +392,13 @@ export class PlanetLod {
   /** Drop subtrees with no data anywhere below and no recent use. */
   private pruneUnusedBranches(): void {
     const prune = (node: LodNode): boolean => {
-      if (!node.children) return !node.data && this.frame - node.lastUsedFrame > this.retainFrames;
+      if (!node.children) return !node.data && !this.pinnedBuilds.has(node.id) && this.frame - node.lastUsedFrame > this.retainFrames;
       const removable = node.children.map(prune).every(Boolean);
       if (removable) {
         for (const child of node.children) this.nodes.delete(child.id);
         node.children = undefined;
       }
-      return removable && !node.data && this.frame - node.lastUsedFrame > this.retainFrames;
+      return removable && !node.data && !this.pinnedBuilds.has(node.id) && this.frame - node.lastUsedFrame > this.retainFrames;
     };
     for (const root of this.roots) prune(root);
   }
@@ -333,6 +406,33 @@ export class PlanetLod {
 
 function dot3(left: Vec3, right: Vec3): number {
   return left.x * right.x + left.y * right.y + left.z * right.z;
+}
+
+function cross3(left: Vec3, right: Vec3): Vec3 {
+  return {
+    x: left.y * right.z - left.z * right.y,
+    y: left.z * right.x - left.x * right.z,
+    z: left.x * right.y - left.y * right.x,
+  };
+}
+
+function tangentAxis(axis: Vec3, radial: Vec3): Vec3 {
+  const projection = dot3(axis, radial);
+  const tangent = { x: axis.x - radial.x * projection, y: axis.y - radial.y * projection, z: axis.z - radial.z * projection };
+  const length = Math.hypot(tangent.x, tangent.y, tangent.z);
+  if (!Number.isFinite(length) || length < 1e-12) throw new Error(`PlanetLod.ts tangentAxis: invalid local basis; axis=${JSON.stringify(axis)}; radial=${JSON.stringify(radial)}; length=${length}`);
+  return { x: tangent.x / length, y: tangent.y / length, z: tangent.z / length };
+}
+
+/** Upper angular radius of a tangent-warped cube-face UV rectangle. */
+function tileAngularRadius(u0: number, v0: number, u1: number, v1: number): number {
+  const quarterPi = Math.PI / 4;
+  const centerU = Math.tan((u0 + u1) * quarterPi / 2);
+  const centerV = Math.tan((v0 + v1) * quarterPi / 2);
+  const du = Math.max(Math.abs(Math.tan(u0 * quarterPi) - centerU), Math.abs(Math.tan(u1 * quarterPi) - centerU));
+  const dv = Math.max(Math.abs(Math.tan(v0 * quarterPi) - centerV), Math.abs(Math.tan(v1 * quarterPi) - centerV));
+  // Normalizing cube vectors of length >= 1 cannot enlarge their chord distance.
+  return 2 * Math.asin(Math.min(1, Math.hypot(du, dv) / 2));
 }
 
 function distance3(left: Vec3, right: Vec3): number {

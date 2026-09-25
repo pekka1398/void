@@ -1,31 +1,49 @@
 import type { LodSelection, TileColorMode } from '../lod';
+import { PLANET_PRESETS, type PlanetPresetId } from './PlanetPresets';
 
 export interface DebugPanelHandlers {
+  onPreset(id: PlanetPresetId): void;
   onFreeze(frozen: boolean): void;
   onColorMode(mode: TileColorMode): void;
   onGridLines(enabled: boolean): void;
-  onTileBorders(enabled: boolean): void;
+  onMeshWireframe(enabled: boolean): void;
+  onTileBoundaries(enabled: boolean): void;
   onSkirts(enabled: boolean): void;
   onSkirtHighlight(enabled: boolean): void;
   onHorizonCulling(enabled: boolean): void;
-  onFrustumCulling(enabled: boolean): void;
-  onScreenError(pixels: number): void;
+  onLodDistanceScale(scale: number): void;
 }
 
 export interface DebugStats {
   frameMilliseconds: number;
-  clearanceMeters: number;
+  centerDistanceMeters: number;
   altitudeMeters: number;
   tiltDegrees: number;
+  probeRadiusMeters: number;
+  probeAltitudeMeters: number;
+  probeThetaDegrees: number;
+  probePhiDegrees: number;
+  probeDistanceMeters: number;
   selection: LodSelection | undefined;
   drawn: number;
   cachedTiles: number;
+  cachedMeshBytes: number;
+  rendererCopyBytes: number;
   nodes: number;
   workers: number;
   queued: number;
   inFlight: number;
   built: number;
   averageBuildMilliseconds: number;
+  averageSampleMilliseconds: number;
+  averageFinishMilliseconds: number;
+  syncMilliseconds: number;
+  renderWaitMilliseconds: number;
+  gpuCreated: number;
+  gpuDisposed: number;
+  drawCalls: number;
+  triangles: number;
+  lines: number;
   spacingMeters(level: number): number;
   frozen: boolean;
 }
@@ -45,18 +63,21 @@ export class DebugPanel {
   private readonly stats = document.createElement('pre');
   private readonly toggles: Toggle[];
   private readonly colorSelect = document.createElement('select');
+  private readonly presetSelect = document.createElement('select');
   private readonly errorInput = document.createElement('input');
   private readonly errorLabel = document.createElement('span');
 
-  constructor(parent: HTMLElement, private readonly handlers: DebugPanelHandlers, initialScreenError: number) {
+  constructor(parent: HTMLElement, private readonly handlers: DebugPanelHandlers, initialLodDistanceScale: number,
+    initialDebug: { readonly meshWireframe: boolean; readonly tileBoundaries: boolean; readonly skirts: boolean;
+      readonly horizonCulling: boolean; readonly colorMode: TileColorMode }, presetId: PlanetPresetId) {
     this.toggles = [
       { key: 'KeyF', label: 'Freeze LOD (fly out to inspect)', value: false, apply: handlers.onFreeze },
       { key: 'KeyG', label: 'Grid lines', value: false, apply: handlers.onGridLines },
-      { key: 'KeyB', label: 'Tile borders', value: true, apply: handlers.onTileBorders },
-      { key: 'KeyK', label: 'Skirts', value: true, apply: handlers.onSkirts },
+      { key: 'KeyB', label: 'Mesh triangles', value: initialDebug.meshWireframe, apply: handlers.onMeshWireframe },
+      { key: 'KeyC', label: 'Tile boundaries', value: initialDebug.tileBoundaries, apply: handlers.onTileBoundaries },
+      { key: 'KeyK', label: 'Skirts', value: initialDebug.skirts, apply: handlers.onSkirts },
       { key: 'KeyJ', label: 'Highlight skirts', value: false, apply: handlers.onSkirtHighlight },
-      { key: 'KeyH', label: 'Horizon culling', value: true, apply: handlers.onHorizonCulling },
-      { key: 'KeyU', label: 'Frustum culling', value: true, apply: handlers.onFrustumCulling },
+      { key: 'KeyH', label: 'Probe horizon culling', value: initialDebug.horizonCulling, apply: handlers.onHorizonCulling },
     ];
     this.root.className = 'lod-panel';
 
@@ -64,6 +85,22 @@ export class DebugPanel {
     title.className = 'lod-title';
     title.textContent = 'LOD LAB';
     this.root.append(title);
+
+    const presetRow = document.createElement('label');
+    for (const [id, preset] of Object.entries(PLANET_PRESETS)) {
+      const option = document.createElement('option');
+      option.value = id;
+      option.textContent = preset.name;
+      this.presetSelect.append(option);
+    }
+    this.presetSelect.value = presetId;
+    this.presetSelect.addEventListener('change', () => {
+      const nextId = this.presetSelect.value;
+      if (!Object.hasOwn(PLANET_PRESETS, nextId)) throw new Error(`DebugPanel.ts: invalid selected preset=${nextId}`);
+      handlers.onPreset(nextId as PlanetPresetId);
+    });
+    presetRow.append('Planet ', this.presetSelect);
+    this.root.append(presetRow);
 
     for (const toggle of this.toggles) {
       const label = document.createElement('label');
@@ -85,24 +122,25 @@ export class DebugPanel {
       this.colorSelect.append(option);
     }
     this.colorSelect.addEventListener('change', () => handlers.onColorMode(this.colorSelect.value as TileColorMode));
+    this.colorSelect.value = initialDebug.colorMode;
     colorRow.append('Color ', this.colorSelect, ' ', key('KeyC'));
     this.root.append(colorRow);
-    handlers.onColorMode(COLOR_MODES[0]);
+    handlers.onColorMode(initialDebug.colorMode);
 
     const errorRow = document.createElement('label');
     this.errorInput.type = 'range';
-    this.errorInput.min = '-1';
-    this.errorInput.max = '5';
+    this.errorInput.min = '-2';
+    this.errorInput.max = '2';
     this.errorInput.step = '0.05';
-    this.errorInput.value = String(Math.log2(initialScreenError));
-    this.errorInput.addEventListener('input', () => this.applyScreenError());
-    errorRow.append('Max screen error ', this.errorInput, ' ', this.errorLabel, ' ', key('BracketLeft'), key('BracketRight'));
+    this.errorInput.value = String(Math.log2(initialLodDistanceScale));
+    this.errorInput.addEventListener('input', () => this.applyLodDistanceScale());
+    errorRow.append('LOD distance scale ', this.errorInput, ' ', this.errorLabel, ' ', key('BracketLeft'), key('BracketRight'));
     this.root.append(errorRow);
-    this.applyScreenError();
+    this.applyLodDistanceScale();
 
     const help = document.createElement('div');
     help.className = 'lod-help';
-    help.textContent = 'Drag: move · Right/Shift-drag: turn & tilt · Wheel: altitude';
+    help.textContent = 'Left drag: pan · Right drag: orbit planet center · Shift + left: look/tilt · Wheel: zoom · Drag along colored probe arrows: r / θ / φ';
     this.root.append(help, this.stats);
     parent.append(this.root);
   }
@@ -119,7 +157,7 @@ export class DebugPanel {
       this.handlers.onColorMode(next);
     } else if (code === 'BracketLeft' || code === 'BracketRight') {
       this.errorInput.value = String(Number(this.errorInput.value) + (code === 'BracketLeft' ? -0.25 : 0.25));
-      this.applyScreenError();
+      this.applyLodDistanceScale();
     }
   }
 
@@ -135,17 +173,23 @@ export class DebugPanel {
       .map(([level, count]) => `L${level}:${count}`).join(' ');
     this.stats.textContent = [
       `frame        ${stats.frameMilliseconds.toFixed(1)} ms`,
-      `clearance    ${meters(stats.clearanceMeters)}   radius-R ${meters(stats.altitudeMeters)}`,
+      `center r     ${meters(stats.centerDistanceMeters)}   radius-R ${meters(stats.altitudeMeters)}`,
       `tilt         ${stats.tiltDegrees.toFixed(0)}°`,
+      `probe        r ${meters(stats.probeRadiusMeters)}  θ ${stats.probeThetaDegrees.toFixed(1)}°  φ ${stats.probePhiDegrees.toFixed(1)}°`,
+      `probe alt    ${meters(stats.probeAltitudeMeters)}  camera gap ${meters(stats.probeDistanceMeters)}`,
       stats.frozen ? '── SELECTION FROZEN ──' : '',
       `drawn        ${stats.drawn} tiles`,
       `finest       L${finest}  ≈ ${meters(stats.spacingMeters(finest))}/cell`,
       `levels       ${histogram}`,
-      `visited      ${selection?.visited ?? 0}  culled frustum ${selection?.culled.frustum ?? 0} horizon ${selection?.culled.horizon ?? 0}`,
-      `select       ${(selection?.selectMilliseconds ?? 0).toFixed(2)} ms`,
+      `visited      ${selection?.visited ?? 0}  culled horizon ${selection?.culled.horizon ?? 0}`,
+      `select       ${(selection?.selectMilliseconds ?? 0).toFixed(2)} ms  walk ${(selection?.traversalMilliseconds ?? 0).toFixed(2)}  balance ${(selection?.balanceMilliseconds ?? 0).toFixed(2)}  evict ${(selection?.evictionMilliseconds ?? 0).toFixed(2)}`,
+      `main         sync ${stats.syncMilliseconds.toFixed(2)} ms  renderAsync ${stats.renderWaitMilliseconds.toFixed(2)} ms`,
+      `GPU objects  +${stats.gpuCreated} / -${stats.gpuDisposed} tiles this frame`,
+      `draw         ${stats.drawCalls} calls  ${stats.triangles} triangles  ${stats.lines} lines`,
       `workers      ${stats.workers}  in flight ${stats.inFlight}  queued ${stats.queued}`,
-      `built        ${stats.built}  avg ${stats.averageBuildMilliseconds.toFixed(1)} ms/tile`,
+      `built        ${stats.built}  avg ${stats.averageBuildMilliseconds.toFixed(1)} ms/tile  sample ${stats.averageSampleMilliseconds.toFixed(1)}  finish ${stats.averageFinishMilliseconds.toFixed(1)}`,
       `cache        ${stats.cachedTiles} tiles  ${stats.nodes} nodes`,
+      `buffers      cache ${mebibytes(stats.cachedMeshBytes)}  renderer copies ${mebibytes(stats.rendererCopyBytes)}`,
     ].filter(Boolean).join('\n');
   }
 
@@ -155,10 +199,10 @@ export class DebugPanel {
     toggle.apply(value);
   }
 
-  private applyScreenError(): void {
-    const pixels = 2 ** Number(this.errorInput.value);
-    this.errorLabel.textContent = `${pixels.toFixed(pixels < 10 ? 2 : 1)} px`;
-    this.handlers.onScreenError(pixels);
+  private applyLodDistanceScale(): void {
+    const scale = 2 ** Number(this.errorInput.value);
+    this.errorLabel.textContent = `${scale.toFixed(2)}×`;
+    this.handlers.onLodDistanceScale(scale);
   }
 }
 
@@ -175,3 +219,5 @@ function meters(value: number): string {
   if (magnitude >= 10) return `${value.toFixed(0)} m`;
   return `${value.toFixed(2)} m`;
 }
+
+function mebibytes(bytes: number): string { return `${(bytes / 1_048_576).toFixed(1)} MiB`; }

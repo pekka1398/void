@@ -10,7 +10,7 @@ interface FaceFrame {
   readonly b: Vec3;
 }
 
-const FACE_FRAMES: readonly FaceFrame[] = [
+export const FACE_FRAMES: readonly FaceFrame[] = [
   { n: { x: 1, y: 0, z: 0 }, a: { x: 0, y: 0, z: -1 }, b: { x: 0, y: 1, z: 0 } },
   { n: { x: -1, y: 0, z: 0 }, a: { x: 0, y: 0, z: 1 }, b: { x: 0, y: 1, z: 0 } },
   { n: { x: 0, y: 1, z: 0 }, a: { x: 1, y: 0, z: 0 }, b: { x: 0, y: 0, z: -1 } },

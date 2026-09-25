@@ -1,39 +1,50 @@
 import * as THREE from 'three/webgpu';
-import { PlanetLod, TileRenderer, type LodSelection, type Vec3 } from '../lod';
+import { PlanetLod, TileRenderer, type LodSelection } from '../lod';
 import { DebugPanel } from './DebugPanel';
-import { DEMO_MAX_HEIGHT_METERS, DEMO_RADIUS_METERS, sampleDemoSurface } from './DemoSurface';
+import { planetPreset, type PlanetPresetId } from './PlanetPresets';
 import { OrbitCamera } from './OrbitCamera';
+import { SphericalProbe, type ProbeAxis, type ProbeDrag } from './SphericalProbe';
 import { TileWorkerPool } from './TileWorkerPool';
 
 const root = document.querySelector<HTMLDivElement>('#app');
 if (!root) throw new Error('LOD lab root is missing');
 
-const radius = DEMO_RADIUS_METERS;
-const resolution = 33;
-const metersPerRenderUnit = 10_000;
+const presetId = new URLSearchParams(window.location.search).get('preset') ?? 'seam';
+const preset = planetPreset(presetId);
+const radius = preset.radiusMeters;
+const resolution = preset.tileResolution;
+const metersPerRenderUnit = preset.metersPerRenderUnit;
 const lod = new PlanetLod({
   radiusMeters: radius,
-  minSurfaceHeightMeters: 0,
-  maxSurfaceHeightMeters: DEMO_MAX_HEIGHT_METERS,
-  occluderRadiusMeters: radius,
+  minSurfaceHeightMeters: preset.minSurfaceHeightMeters,
+  maxSurfaceHeightMeters: preset.maxSurfaceHeightMeters,
+  occluderRadiusMeters: preset.occluderRadiusMeters,
+  lodSurfaceBandMeters: preset.lodSurfaceBandMeters,
   resolution,
-  maxLevel: 13,
-  maxCachedTiles: 1800,
+  maxLevel: preset.maxLevel,
+  splitDistanceRatios: preset.splitDistanceRatios,
+  maxCachedTiles: preset.maxCachedTiles,
 });
 const orbit = new OrbitCamera({
-  radiusMeters: radius,
-  groundHeightMeters: (direction) => sampleDemoSurface(direction).heightMeters,
-  minClearanceMeters: 5,
-}, { x: 0.48, y: 0.33, z: 0.81 }, radius * 1.7);
+  maxDistanceMeters: radius * preset.camera.maxDistanceRadii,
+}, { x: preset.camera.initialDirection[0], y: preset.camera.initialDirection[1], z: preset.camera.initialDirection[2] }, radius * preset.camera.initialDistanceRadii);
 const tiles = new TileRenderer({ resolution, metersPerRenderUnit });
+const startDirection = new THREE.Vector3(...preset.camera.initialDirection).normalize();
+const probe = new SphericalProbe(radius, metersPerRenderUnit, {
+  r: radius * preset.probe.initialRadiusRadii,
+  theta: Math.acos(startDirection.y),
+  // Start off the camera's radial sightline so all three drag axes are visible.
+  phi: Math.atan2(startDirection.z, startDirection.x) + preset.probe.initialPhiOffsetRadians,
+});
 const scene = new THREE.Scene();
 scene.add(tiles.group);
+scene.add(probe.group);
 scene.add(new THREE.HemisphereLight(0xd6edff, 0x354963, 2));
 const sun = new THREE.DirectionalLight(0xffe1ba, 3);
 sun.position.set(700, 850, 1000);
 scene.add(sun);
 
-const camera = new THREE.PerspectiveCamera(60, 1, 0.0001, 30000);
+const camera = new THREE.PerspectiveCamera(preset.camera.fovDegrees, 1, 0.0001, 30000);
 const renderer = new THREE.WebGPURenderer({
   antialias: true,
   logarithmicDepthBuffer: true,
@@ -47,8 +58,10 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 root.append(renderer.domElement);
 let disposed = false;
 function panic(error: unknown): never {
-  disposed = true;
   const failure = error instanceof Error ? error : new Error(`Non-Error thrown: ${String(error)}`);
+  if (disposed) throw failure;
+  disposed = true;
+  workers.dispose();
   const message = document.createElement('pre');
   const chain: string[] = [];
   let current: unknown = failure;
@@ -62,24 +75,31 @@ function panic(error: unknown): never {
   root!.append(message);
   throw failure;
 }
-const workers = new TileWorkerPool({ radiusMeters: radius, resolution }, (data) => lod.acceptTile(data), panic, 4);
+const workers = new TileWorkerPool({ radiusMeters: radius, resolution }, presetId as PlanetPresetId, (data) => {
+  lod.acceptTile(data);
+  lod.unpinBuild(data.id);
+}, panic, preset.workerCount, (id) => lod.pinBuild(id));
 
 let frozen = false;
-let gridErrorPixels = 4;
-let horizonCulling = true;
-let frustumCulling = true;
+let lodDistanceScale: number = preset.initialDistanceScale;
+let horizonCulling: boolean = preset.debug.horizonCulling;
 let selection: LodSelection | undefined;
 const panel = new DebugPanel(root, {
+  onPreset: (nextId) => {
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set('preset', nextId);
+    window.location.assign(nextUrl.href);
+  },
   onFreeze: (value) => { frozen = value; },
   onColorMode: (value) => tiles.setColorMode(value),
   onGridLines: (value) => tiles.setGridLines(value),
-  onTileBorders: (value) => tiles.setTileBorders(value),
+  onMeshWireframe: (value) => tiles.setMeshWireframe(value),
+  onTileBoundaries: (value) => tiles.setTileBoundaries(value),
   onSkirts: (value) => tiles.setSkirts(value),
   onSkirtHighlight: (value) => tiles.setSkirtHighlight(value),
   onHorizonCulling: (value) => { horizonCulling = value; },
-  onFrustumCulling: (value) => { frustumCulling = value; },
-  onScreenError: (value) => { gridErrorPixels = value; },
-}, gridErrorPixels);
+  onLodDistanceScale: (value) => { lodDistanceScale = value; },
+}, lodDistanceScale, preset.debug, presetId as PlanetPresetId);
 
 const resize = () => {
   const width = Math.max(1, root.clientWidth);
@@ -92,30 +112,51 @@ const resizeObserver = new ResizeObserver(resize);
 resizeObserver.observe(root);
 resize();
 
-let pointer: { x: number; y: number; turning: boolean } | undefined;
+type DragMode = 'pan' | 'orbit' | 'look' | ProbeAxis;
+let pointer: { id: number; x: number; y: number; mode: DragMode; probeDrag?: ProbeDrag } | undefined;
 const canvas = renderer.domElement;
 canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 canvas.addEventListener('pointerdown', (event) => {
+  if (pointer) return;
+  if (event.button !== 0 && event.button !== 2) return;
+  const axis = event.button === 0 ? probe.pick(event.clientX, event.clientY, canvas, camera) : undefined;
+  const mode: DragMode = axis ?? (event.button === 2 ? 'orbit' : event.shiftKey ? 'look' : 'pan');
+  const probeDrag = axis ? probe.beginDrag(axis, event.clientX, event.clientY, camera, canvas) : undefined;
   canvas.setPointerCapture(event.pointerId);
-  pointer = { x: event.clientX, y: event.clientY, turning: event.button === 2 || event.shiftKey };
+  pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, mode, probeDrag };
+  event.preventDefault();
 });
-canvas.addEventListener('pointerup', () => { pointer = undefined; });
-canvas.addEventListener('pointercancel', () => { pointer = undefined; });
+const endDrag = (event: PointerEvent) => {
+  if (pointer?.id !== event.pointerId) return;
+  pointer = undefined;
+  if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+};
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+canvas.addEventListener('lostpointercapture', (event) => {
+  if (pointer?.id === event.pointerId) pointer = undefined;
+});
+window.addEventListener('blur', () => { pointer = undefined; });
 canvas.addEventListener('pointermove', (event) => {
-  if (!pointer) return;
+  if (!pointer || pointer.id !== event.pointerId) return;
+  event.preventDefault();
   const dx = event.clientX - pointer.x;
   const dy = event.clientY - pointer.y;
-  if (pointer.turning || event.shiftKey) orbit.turn(-dx * 0.005, dy * 0.005);
+  if (pointer.mode === 'orbit') orbit.orbitAroundCenter(-dx * 0.005, -dy * 0.005);
+  else if (pointer.mode === 'look') orbit.turn(-dx * 0.005, dy * 0.005);
+  else if (pointer.mode === 'pan') orbit.panScreen(dx, dy, camera.fov * Math.PI / 180, root.clientHeight);
   else {
-    const meters = orbit.metersPerPixel(camera.fov * Math.PI / 180, root.clientHeight);
-    orbit.pan(dy * meters, -dx * meters);
+    if (!pointer.probeDrag) throw new Error(`main.ts pointermove: ${pointer.mode} drag has no captured probe state; pointerId=${pointer.id}`);
+    probe.drag(pointer.probeDrag, event.clientX, event.clientY);
   }
   pointer.x = event.clientX;
   pointer.y = event.clientY;
 });
 canvas.addEventListener('wheel', (event) => {
   event.preventDefault();
-  orbit.zoom(Math.exp(event.deltaY * 0.001));
+  const deltaPixels = event.deltaY * (event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 :
+    event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? root.clientHeight : 1);
+  orbit.zoom(Math.exp(THREE.MathUtils.clamp(deltaPixels, -500, 500) * 0.0004));
 }, { passive: false });
 window.addEventListener('keydown', (event) => {
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
@@ -129,48 +170,64 @@ async function renderFrame(now: number): Promise<void> {
   const frameMilliseconds = now - previous;
   previous = now;
   const pose = orbit.pose();
+  const probePosition = probe.position;
   camera.position.set(0, 0, 0);
   camera.up.set(pose.up.x, pose.up.y, pose.up.z);
   camera.lookAt(pose.forward.x, pose.forward.y, pose.forward.z);
   camera.updateMatrixWorld();
-  const frustum = new THREE.Frustum().setFromProjectionMatrix(
-    new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse),
-  );
+  probe.sync(pose.position);
   if (!frozen || !selection) {
     selection = lod.select({
-      cameraPosition: pose.position,
-      viewportHeightPixels: root!.clientHeight,
-      fovYRadians: camera.fov * Math.PI / 180,
-      maxScreenErrorPixels: gridErrorPixels,
+      observerPosition: probePosition,
+      distanceScale: lodDistanceScale,
       horizonCulling,
-      isSphereVisible: frustumCulling ? (center: Vec3, boundRadius: number) => frustum.intersectsSphere(
-        new THREE.Sphere(new THREE.Vector3(
-          (center.x - pose.position.x) / metersPerRenderUnit,
-          (center.y - pose.position.y) / metersPerRenderUnit,
-          (center.z - pose.position.z) / metersPerRenderUnit,
-        ), boundRadius / metersPerRenderUnit),
-      ) : undefined,
     });
     workers.setWanted(selection.requests);
   }
+  const syncStarted = performance.now();
   tiles.sync(selection.render, pose.position);
+  const syncMilliseconds = performance.now() - syncStarted;
+  const gpuCreated = tiles.createdLastSync;
+  const gpuDisposed = tiles.disposedLastSync;
+  const renderStarted = performance.now();
   await renderer.renderAsync(scene, camera);
+  const renderWaitMilliseconds = performance.now() - renderStarted;
   if (now - lastPanelUpdate > 150) {
     lastPanelUpdate = now;
     panel.update({
       frameMilliseconds,
-      clearanceMeters: orbit.clearanceMeters,
+      centerDistanceMeters: orbit.distanceMeters,
       altitudeMeters: Math.hypot(pose.position.x, pose.position.y, pose.position.z) - radius,
       tiltDegrees: orbit.tiltRadians * 180 / Math.PI,
+      probeRadiusMeters: probe.spherical.r,
+      probeAltitudeMeters: probe.spherical.r - radius,
+      probeThetaDegrees: probe.spherical.theta * 180 / Math.PI,
+      probePhiDegrees: probe.spherical.phi * 180 / Math.PI,
+      probeDistanceMeters: Math.hypot(
+        probePosition.x - pose.position.x,
+        probePosition.y - pose.position.y,
+        probePosition.z - pose.position.z,
+      ),
       selection,
       drawn: tiles.drawnTileCount,
       cachedTiles: lod.cachedTileCount,
+      cachedMeshBytes: lod.cachedMeshBytes,
+      rendererCopyBytes: tiles.rendererCopyBytes,
       nodes: lod.nodeCount,
       workers: workers.workerCount,
       queued: workers.queuedCount,
       inFlight: workers.inFlightCount,
       built: workers.totalBuilt,
       averageBuildMilliseconds: workers.averageBuildMilliseconds,
+      averageSampleMilliseconds: workers.averageSampleMilliseconds,
+      averageFinishMilliseconds: workers.averageFinishMilliseconds,
+      syncMilliseconds,
+      renderWaitMilliseconds,
+      gpuCreated,
+      gpuDisposed,
+      drawCalls: renderer.info.render.drawCalls,
+      triangles: renderer.info.render.triangles,
+      lines: renderer.info.render.lines,
       spacingMeters: (level) => lod.spacingMeters(level),
       frozen,
     });
@@ -190,5 +247,6 @@ if (import.meta.hot) import.meta.hot.dispose(() => {
   resizeObserver.disconnect();
   workers.dispose();
   tiles.dispose();
+  probe.dispose();
   renderer.dispose();
 });

@@ -7,7 +7,8 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "check": "tsx lod-check.ts"
+    "check": "tsx lod-check.ts",
+    "face-table": "tsx face-table.ts"
   },
   "dependencies": { "three": "0.185.1" },
   "devDependencies": {

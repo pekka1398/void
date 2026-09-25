@@ -2,6 +2,7 @@ import { tileId } from '../lod/TileKey';
 import type { TileMeshData, TileMeshOptions } from '../lod/TileMeshBuilder';
 import type { TileRequest } from '../lod/PlanetLod';
 import type { TileWorkerRequest } from './tile.worker';
+import type { PlanetPresetId } from './PlanetPresets';
 
 /**
  * Priority queue over a fixed set of workers. The wanted set is replaced
@@ -15,12 +16,16 @@ export class TileWorkerPool {
   private readonly inFlight = new Set<string>();
   private builtCount = 0;
   private buildMillisecondsTotal = 0;
+  private sampleMillisecondsTotal = 0;
+  private finishMillisecondsTotal = 0;
 
   constructor(
     options: TileMeshOptions,
+    presetId: PlanetPresetId,
     private readonly onTile: (tile: TileMeshData) => void,
     private readonly onFatal: (error: Error) => void,
     workerCount: number,
+    private readonly onBuildStart: (id: string) => void,
   ) {
     if (!Number.isInteger(workerCount) || workerCount < 1) {
       throw new Error(`TileWorkerPool.ts: invalid workerCount=${workerCount}`);
@@ -33,7 +38,7 @@ export class TileWorkerPool {
         this.onFatal(new Error(`tile.worker.ts failed: ${event.message}; source=${event.filename}:${event.lineno}:${event.colno}; job=${this.busy.get(worker) ?? 'initialization'}; inFlight=${this.inFlight.size}`));
       };
       worker.onmessageerror = () => this.onFatal(new Error(`TileWorkerPool.ts: unreadable worker response; job=${this.busy.get(worker) ?? 'initialization'}`));
-      const init: TileWorkerRequest = { type: 'init', options };
+      const init: TileWorkerRequest = { type: 'init', options, presetId };
       worker.postMessage(init);
       this.idle.push(worker);
     }
@@ -46,6 +51,8 @@ export class TileWorkerPool {
   get averageBuildMilliseconds(): number {
     return this.builtCount ? this.buildMillisecondsTotal / this.builtCount : 0;
   }
+  get averageSampleMilliseconds(): number { return this.builtCount ? this.sampleMillisecondsTotal / this.builtCount : 0; }
+  get averageFinishMilliseconds(): number { return this.builtCount ? this.finishMillisecondsTotal / this.builtCount : 0; }
 
   isInFlight(id: string): boolean { return this.inFlight.has(id); }
 
@@ -71,6 +78,7 @@ export class TileWorkerPool {
       const id = tileId(request.key);
       if (this.inFlight.has(id)) continue;
       const worker = this.idle.pop()!;
+      this.onBuildStart(id);
       this.busy.set(worker, id);
       this.inFlight.add(id);
       const message: TileWorkerRequest = { type: 'build', key: request.key };
@@ -89,6 +97,8 @@ export class TileWorkerPool {
     this.idle.push(worker);
     this.builtCount++;
     this.buildMillisecondsTotal += tile.buildMilliseconds;
+    this.sampleMillisecondsTotal += tile.sampleMilliseconds;
+    this.finishMillisecondsTotal += tile.finishMilliseconds;
     try {
       this.onTile(tile);
     } catch (cause) {

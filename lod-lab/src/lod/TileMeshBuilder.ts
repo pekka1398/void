@@ -31,6 +31,13 @@ export interface TileMeshData {
   readonly errorMeters: number;
   readonly skirtDepthMeters: number;
   readonly buildMilliseconds: number;
+  readonly sampleMilliseconds: number;
+  readonly finishMilliseconds: number;
+}
+
+/** Resident typed-array payload, excluding JS objects and renderer copies. */
+export function tileBufferBytes(tile: TileMeshData): number {
+  return tile.positions.byteLength + tile.normals.byteLength + tile.colors.byteLength + tile.grid.byteLength;
 }
 
 export interface TileMeshOptions {
@@ -92,6 +99,7 @@ export function buildTileMesh(key: TileKey, sampler: SurfaceSampler, options: Ti
       }
     }
   }
+  const sampled = performance.now();
 
   const vertexCount = n * n + 4 * n;
   const positions = new Float32Array(vertexCount * 3);
@@ -165,6 +173,7 @@ export function buildTileMesh(key: TileKey, sampler: SurfaceSampler, options: Ti
     }
   }
 
+  const finished = performance.now();
   return {
     id: tileId(key),
     key,
@@ -177,7 +186,9 @@ export function buildTileMesh(key: TileKey, sampler: SurfaceSampler, options: Ti
     maxHeightMeters: maxHeight,
     errorMeters,
     skirtDepthMeters,
-    buildMilliseconds: performance.now() - started,
+    buildMilliseconds: finished - started,
+    sampleMilliseconds: sampled - started,
+    finishMilliseconds: finished - sampled,
   };
 }
 
