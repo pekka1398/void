@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {
   cross, DEGREES, dot, findApsides, length, osculatingOrbit, Simulation, spinAxis, sub,
-  type AttitudeMode, type FrameSpec, type ManeuverSpec,
+  type AttitudeMode, type FrameSpec, type ManeuverSpec, type StartPlane,
 } from '../orbit';
 import { CameraRig } from './CameraRig';
 import { formatDistance, formatDuration, formatSpeed, formatWarp } from './Format';
@@ -22,6 +22,8 @@ const RETENTION_MARGIN_SECONDS = 86_400;
 const THROTTLE_RATE_PER_SECOND = 0.5;
 const MAX_APSIDES = 6;
 const HOME_BODY: Record<SystemPresetId, string> = { sol: 'aurelia', binary: 'aurelia-veil' };
+/** The start orbit lies in this moon's orbital plane, so a transfer to it needs no plane change. */
+const HOME_MOON: Record<SystemPresetId, string> = { sol: 'selene', binary: 'lumen' };
 const ATTITUDE_KEYS: Record<string, AttitudeMode> = {
   Digit1: 'prograde', Digit2: 'retrograde', Digit3: 'normal', Digit4: 'antinormal',
   Digit5: 'radial-out', Digit6: 'radial-in', Digit7: 'hold',
@@ -63,7 +65,7 @@ const sim = new Simulation({
   system: SYSTEM_PRESETS[systemId],
   stepsPerOrbit: 256,
   tolerances: { positionMeters: 1e-4, velocityMetersPerSecond: 1e-7 },
-  vesselStart: { homeBodyId: HOME_BODY[systemId], altitudeMeters: 400e3, inclinationRadians: 0 * DEGREES },
+  vesselStart: { homeBodyId: HOME_BODY[systemId], altitudeMeters: 400e3, plane: { kind: 'orbit-of', bodyId: HOME_MOON[systemId] } },
   // Chemical stage: 250 kN, Isp 350 s, 10 t dry + 30 t propellant = 4.76 km/s.
   engine: { thrustNewtons: 250e3, specificImpulseSeconds: 350, dryMassKg: 10e3, fuelMassKg: 30e3 },
   retentionSeconds: Math.max(trailSpan, vesselSpan) + RETENTION_MARGIN_SECONDS,
@@ -92,7 +94,8 @@ const camera = new THREE.PerspectiveCamera(50, 1, 1, 2);
 const rig = new CameraRig(renderer.domElement, 60_000, 5e10);
 const view = new SceneView(sim, overlay, frame, trailSpan, vesselSpan, (picked) => setFocus(picked));
 
-const panel = new Panel(document.body, sim.system.bodies, { frame, focus, trailSpan, vesselSpan, predictionSpan, planCoast, system: systemId }, {
+const panel = new Panel(document.body, sim.system.bodies, { frame, focus, trailSpan, vesselSpan, predictionSpan, planCoast, system: systemId,
+  startPlanes: startPlaneChoices(), startPlane: startPlaneValue(sim.vesselStart.plane) }, {
   frame(spec) { frame = spec; view.setFrame(spec); },
   focus(next) { setFocus(next); },
   trailSpan(s) { trailSpan = s; view.setTrailSpan(s); updateRetention(); },
@@ -126,9 +129,36 @@ const panel = new Panel(document.body, sim.system.bodies, { frame, focus, trailS
   },
   planReference(body) { editSelected((spec) => ({ ...spec, referenceBody: body })); },
   planCoast(s) { sim.plan.coastSeconds = s; },
+  startPlane(value) {
+    sim.vesselStart = { ...sim.vesselStart, plane: parseStartPlane(value) };
+    sim.resetVessel();
+    view.invalidatePaths();
+  },
   planDeltaV(component, value) { editSelected((spec) => ({ ...spec, [component]: value })); },
 });
 panel.showAttitude(sim.attitudeMode);
+
+/** Select values: "equator", or "orbit-of:<id>" for each satellite of the home body. */
+function startPlaneChoices(): [string, string][] {
+  const home = sim.bodyIndex(HOME_BODY[systemId]);
+  const homeName = sim.system.bodies[home]!.name;
+  return [
+    ['equator', `${homeName} equator`],
+    ...sim.system.bodies.filter((b) => b.parentIndex === home).map((b): [string, string] => [`orbit-of:${b.id}`, `${b.name}'s orbit plane`]),
+  ];
+}
+
+function startPlaneValue(plane: StartPlane): string {
+  if (plane.kind === 'orbit-of') return `orbit-of:${plane.bodyId}`;
+  if (plane.inclinationRadians !== 0) throw new Error(`start plane inclination ${plane.inclinationRadians} has no panel choice`);
+  return 'equator';
+}
+
+function parseStartPlane(value: string): StartPlane {
+  if (value === 'equator') return { kind: 'equatorial', inclinationRadians: 0 };
+  if (value.startsWith('orbit-of:')) return { kind: 'orbit-of', bodyId: value.slice('orbit-of:'.length) };
+  throw new RangeError(`start plane "${value}"`);
+}
 
 function requireSelected(): number {
   if (selectedBurn === null || selectedBurn >= sim.plan.count) throw new Error(`no burn selected (${selectedBurn})`);

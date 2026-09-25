@@ -28,7 +28,7 @@ The page uses a plain three.js `WebGLRenderer` with a logarithmic depth buffer. 
 
 ### Vessel (P3)
 
-The default stage is chemical: 250 kN of thrust, Isp 350 s, 10 t dry mass and 30 t of propellant, which gives 4.76 km/s of delta-v. It starts in a 400 km circular orbit.
+The default stage is chemical: 250 kN of thrust, Isp 350 s, 10 t dry mass and 30 t of propellant, which gives 4.76 km/s of delta-v. It starts in a 400 km circular orbit. **Start orbit** chooses its plane: the home body's equator, or the current orbital plane of one of its moons (the default is Selene, or Lumen in the binary preset). Selene's orbit is 18–28° from Aurelia's equator, so from an equatorial orbit a transfer only works when Selene crosses the equator, twice a month. From its plane, a prograde burn of about 3.1 km/s reaches it within the first orbit. Changing the choice resets the vessel.
 
 - `Shift`/`Ctrl` raise and lower the throttle, `Z` sets full and `X` cuts. Thrust is integrated as a finite burn. Mass falls at thrust / (Isp g0). When the tanks empty inside a frame, that leg ends exactly at burnout and the rest of the frame coasts.
 - Attitude keys `1`–`7` select prograde, retrograde, normal, antinormal, radial out, radial in and hold. The first six track the trajectory's Frenet frame relative to the **reference** body, recomputed continuously during the burn. `Hold` freezes the current direction in inertial space. The orange line shows where the engine points.

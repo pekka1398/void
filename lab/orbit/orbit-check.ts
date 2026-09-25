@@ -365,7 +365,7 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
 {
   const sim = new Simulation({
     system: SYSTEM_PRESETS.sol, stepsPerOrbit: STEPS_PER_ORBIT, tolerances: TOLERANCES,
-    vesselStart: { homeBodyId: 'aurelia', altitudeMeters: 400e3, inclinationRadians: 0 },
+    vesselStart: { homeBodyId: 'aurelia', altitudeMeters: 400e3, plane: { kind: 'equatorial', inclinationRadians: 0 } },
     retentionSeconds: 2 * SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: 3600, planCoastSeconds: 3600,
   });
   const positions = new Float64Array(sim.ephemeris.bodyCount * 3);
@@ -403,7 +403,7 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
 
   const crash = new Simulation({
     system: SYSTEM_PRESETS.sol, stepsPerOrbit: STEPS_PER_ORBIT, tolerances: TOLERANCES,
-    vesselStart: { homeBodyId: 'aurelia', altitudeMeters: -1e3, inclinationRadians: 0 },
+    vesselStart: { homeBodyId: 'aurelia', altitudeMeters: -1e3, plane: { kind: 'equatorial', inclinationRadians: 0 } },
     retentionSeconds: SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: 3600, planCoastSeconds: 3600,
   });
   check('start below surface panics', throws(() => crash.advance(10, 100)), 'throws');
@@ -507,7 +507,7 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
   // Simulation: burnout and a deorbit prediction.
   const sim = new Simulation({
     system: SYSTEM_PRESETS.sol, stepsPerOrbit: STEPS_PER_ORBIT, tolerances: TOLERANCES,
-    vesselStart: { homeBodyId: 'aurelia', altitudeMeters: 400e3, inclinationRadians: 0 },
+    vesselStart: { homeBodyId: 'aurelia', altitudeMeters: 400e3, plane: { kind: 'equatorial', inclinationRadians: 0 } },
     retentionSeconds: SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: 6 * 3600, planCoastSeconds: 3600,
   });
   const home = sim.bodyIndex('aurelia');
@@ -544,7 +544,7 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
 function planSim(horizon: number): Simulation {
   return new Simulation({
     system: SYSTEM_PRESETS.sol, stepsPerOrbit: STEPS_PER_ORBIT, tolerances: TOLERANCES,
-    vesselStart: { homeBodyId: 'aurelia', altitudeMeters: 400e3, inclinationRadians: 0 },
+    vesselStart: { homeBodyId: 'aurelia', altitudeMeters: 400e3, plane: { kind: 'equatorial', inclinationRadians: 0 } },
     retentionSeconds: SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: horizon, planCoastSeconds: horizon,
   });
 }
@@ -626,6 +626,24 @@ function finishPlan(sim: Simulation): void {
   sim.advance(1, 1e6);
   check('planned burn overrides the throttle', sim.throttle === 0, 'manual throttle zeroed during the burn');
 
+  {
+    const moonPlane = new Simulation({
+      system: SYSTEM_PRESETS.sol, stepsPerOrbit: STEPS_PER_ORBIT, tolerances: TOLERANCES,
+      vesselStart: { homeBodyId: 'aurelia', altitudeMeters: 400e3, plane: { kind: 'orbit-of', bodyId: 'selene' } },
+      retentionSeconds: SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: 3600, planCoastSeconds: 3600,
+    });
+    const e = moonPlane.ephemeris;
+    const earthI = moonPlane.bodyIndex('aurelia'), moonI = moonPlane.bodyIndex('selene');
+    const rel = (i: number) => ({ r: subVec(e.bodyState(i, 0).position, e.bodyState(earthI, 0).position), v: subVec(e.bodyState(i, 0).velocity, e.bodyState(earthI, 0).velocity) });
+    const m = rel(moonI);
+    const vr = subVec(moonPlane.vessel.position, e.bodyState(earthI, 0).position);
+    const vv = subVec(moonPlane.vessel.velocity, e.bodyState(earthI, 0).velocity);
+    const hm = normalize(cross(m.r, m.v)), hv = normalize(cross(vr, vv));
+    const altitude = length(vr) - moonPlane.system.bodies[earthI]!.radiusMeters;
+    check('start in a moon\'s orbit plane', distance(hm, hv) < 1e-12 && Math.abs(altitude - 400e3) < 1e-3
+      && throws(() => { moonPlane.vesselStart = { ...moonPlane.vesselStart, plane: { kind: 'orbit-of', bodyId: 'ares' } }; moonPlane.resetVessel(); }),
+      `orbit normal ${fmt(distance(hm, hv))} from Selene's, ${(altitude / 1e3).toFixed(3)} km up; a body not orbiting Aurelia is rejected`);
+  }
   const sim2 = planSim(3600);
   sim2.advance(100, 1e6);
   sim2.addManeuver(burn(50, 10));

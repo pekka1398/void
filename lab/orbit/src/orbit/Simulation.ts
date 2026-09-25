@@ -6,16 +6,26 @@ import { FlightPlan, type ApsisPlacement, type BurnSchedule, type ManeuverSpec }
 import { stateFromElements } from './Kepler';
 import { buildSystem, type BuiltSystem, type SystemSpec } from './SystemSpec';
 import { Trajectory } from './Trajectory';
-import { add, dot, sub, type Vec3 } from './Vec3';
+import { add, cross, dot, normalize, sub, type Vec3 } from './Vec3';
+import type { Basis } from './BodyRotation';
 import {
   PropagationRun, VesselPropagator, type AttitudeLaw, type ThrustControl, type Tolerances, type VesselState,
 } from './VesselPropagator';
 
+/**
+ * Plane of the start orbit:
+ * - equatorial: inclined from the home body's equator, ascending node at its equinox.
+ * - orbit-of: the current orbital plane of one of the home body's satellites,
+ *   same direction of motion, starting on the line to that satellite.
+ */
+export type StartPlane =
+  | { kind: 'equatorial'; inclinationRadians: number }
+  | { kind: 'orbit-of'; bodyId: string };
+
 export interface VesselStartSpec {
   homeBodyId: string;
   altitudeMeters: number;
-  /** Relative to the home body's equator. */
-  inclinationRadians: number;
+  plane: StartPlane;
 }
 
 export interface EngineSpec {
@@ -81,7 +91,7 @@ export class Simulation {
   /** Burns flown automatically at full thrust when their start time arrives. */
   readonly plan: FlightPlan;
   private readonly predictor: VesselPropagator;
-  private readonly vesselStart: VesselStartSpec;
+  private start: VesselStartSpec;
   private retention: number;
   private horizon: number;
   private run: PropagationRun;
@@ -107,7 +117,7 @@ export class Simulation {
     this.propagator = new VesselPropagator(this.ephemeris, options.tolerances);
     this.predictor = new VesselPropagator(this.ephemeris, options.tolerances);
     this.dominance = new DominanceTree(this.system.bodies);
-    this.vesselStart = options.vesselStart;
+    this.start = { ...options.vesselStart };
     this.engine = checkedEngine(options.engine);
     this.retention = checkedPositive(options.retentionSeconds, 'retention');
     this.horizon = checkedPositive(options.predictionHorizonSeconds, 'prediction horizon');
@@ -234,6 +244,15 @@ export class Simulation {
     const state = this.run.state;
     const law = this.executingBurn?.control?.attitude ?? this.attitudeLaw();
     return this.propagator.thrustDirection(law, this.time, state.position, state.velocity);
+  }
+
+  get vesselStart(): VesselStartSpec {
+    return { ...this.start };
+  }
+
+  /** Used by the next resetVessel. */
+  set vesselStart(spec: VesselStartSpec) {
+    this.start = { ...spec };
   }
 
   /** Put a fresh vessel with full tanks on its start orbit at the current time. */
@@ -387,19 +406,20 @@ export class Simulation {
   }
 
   private startRun(): PropagationRun {
-    const home = this.bodyIndex(this.vesselStart.homeBodyId);
+    const home = this.bodyIndex(this.start.homeBodyId);
     const body = this.system.bodies[home]!;
     const planet = this.ephemeris.bodyState(home, this.time);
+    const plane = this.start.plane;
     const local = stateFromElements({
-      semiMajorAxisMeters: body.radiusMeters + this.vesselStart.altitudeMeters,
+      semiMajorAxisMeters: body.radiusMeters + this.start.altitudeMeters,
       eccentricity: 0,
-      inclinationRadians: this.vesselStart.inclinationRadians,
+      inclinationRadians: plane.kind === 'equatorial' ? plane.inclinationRadians : 0,
       longitudeOfAscendingNodeRadians: 0,
       argumentOfPeriapsisRadians: 0,
       meanAnomalyRadians: 0,
     }, body.gm);
-    // The elements are equatorial; rotate them into the ecliptic frame.
-    const axes = equatorialAxes(body);
+    // The elements are in the plane's own axes; rotate them into the ecliptic frame.
+    const axes = plane.kind === 'equatorial' ? equatorialAxes(body) : this.satellitePlane(home, plane.bodyId);
     const toEcliptic = (v: Vec3): Vec3 => ({
       x: v.x * axes.x.x + v.y * axes.y.x + v.z * axes.z.x,
       y: v.x * axes.x.y + v.y * axes.y.y + v.z * axes.z.y,
@@ -414,6 +434,20 @@ export class Simulation {
     });
     this.history.append(run.time, run.y);
     return run;
+  }
+
+  /** x toward the satellite, z along its orbital angular momentum about home. */
+  private satellitePlane(home: number, satelliteId: string): Basis {
+    const index = this.bodyIndex(satelliteId);
+    if (this.system.bodies[index]!.parentIndex !== home) {
+      throw new RangeError(`Simulation: ${satelliteId} does not orbit ${this.system.bodies[home]!.id}`);
+    }
+    const s = this.ephemeris.bodyState(index, this.time);
+    const h = this.ephemeris.bodyState(home, this.time);
+    const r = sub(s.position, h.position);
+    const z = normalize(cross(r, sub(s.velocity, h.velocity)));
+    const x = normalize(r);
+    return { x, y: cross(z, x), z };
   }
 
   private recordImpact(bodyIndex: number): void {

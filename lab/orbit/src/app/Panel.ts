@@ -71,6 +71,8 @@ export interface PanelHandlers {
   planReference(body: number): void;
   planDeltaV(component: DeltaVComponent, value: number): void;
   planCoast(seconds: number): void;
+  /** A value from the startPlanes choices; resets the vessel. */
+  startPlane(value: string): void;
 }
 
 type FrameKind = FrameSpec['kind'];
@@ -100,7 +102,8 @@ export class Panel {
   constructor(
     root: HTMLElement,
     bodies: readonly CelestialBody[],
-    initial: { frame: FrameSpec; focus: Focus; trailSpan: number; vesselSpan: number; predictionSpan: number; planCoast: number; system: SystemPresetId },
+    initial: { frame: FrameSpec; focus: Focus; trailSpan: number; vesselSpan: number; predictionSpan: number; planCoast: number; system: SystemPresetId;
+      startPlanes: readonly [string, string][]; startPlane: string },
     handlers: PanelHandlers,
   ) {
     this.element = document.createElement('div');
@@ -126,6 +129,8 @@ export class Panel {
       <label>Focus <select data-k="focus"><option value="vessel">Vessel</option>${bodyOptions}</select></label>
       <label>Body trails <select data-k="trail">${spanOptions(TRAIL_SPANS, initial.trailSpan)}</select></label>
       <label>Vessel history <select data-k="vessel-span">${spanOptions(VESSEL_SPANS, initial.vesselSpan)}</select></label>
+      <label>Start orbit <select data-k="start-plane">${initial.startPlanes.map(([v, label]) =>
+        `<option value="${v}"${v === initial.startPlane ? ' selected' : ''}>${label}</option>`).join('')}</select></label>
       <button data-k="reset">Reset vessel to start orbit</button>
       <div class="section">VESSEL</div>
       <div class="throttle"><div class="bar"><b></b></div><span>0%</span></div>
@@ -257,6 +262,7 @@ export class Panel {
     q<HTMLSelectElement>('vessel-span').addEventListener('change', (e) => handlers.vesselSpan(Number((e.target as HTMLSelectElement).value)));
     q<HTMLSelectElement>('system').addEventListener('change', (e) => handlers.system((e.target as HTMLSelectElement).value as SystemPresetId));
     q<HTMLButtonElement>('reset').addEventListener('click', () => handlers.resetVessel());
+    q<HTMLSelectElement>('start-plane').addEventListener('change', (e) => handlers.startPlane((e.target as HTMLSelectElement).value));
   }
 
   showFocus(focus: Focus): void {
