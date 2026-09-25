@@ -11,7 +11,10 @@ const TRAIL_SAMPLES_PER_PERIOD = 128;
 const MAX_TRAIL_SAMPLES = 6000;
 const LABEL_HEIGHT = 13;
 const VESSEL_COLOR = '#7dffb0';
+const HISTORY_COLOR = '#ff5a5a';
 const PREDICTION_COLOR = '#4fc8ff';
+/** Opacity at the far end of a fading vessel path; the present end is fully opaque. */
+const FADE_FLOOR = 0.1;
 
 export type Focus = { kind: 'body'; index: number } | { kind: 'vessel' };
 
@@ -61,8 +64,8 @@ export class SceneView {
     this.vesselSpan = vesselSpan;
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.08));
     this.bodies = sim.system.bodies.map((body) => this.createBody(body, onPick));
-    this.vesselTrail = createLine(VESSEL_COLOR, 1);
-    this.predictionLine = createLine(PREDICTION_COLOR, 0.9);
+    this.vesselTrail = createFadingLine();
+    this.predictionLine = createFadingLine();
     this.thrustArrow = createLine('#ff9a3c', 1);
     this.scene.add(this.vesselTrail, this.predictionLine, this.thrustArrow);
     this.vesselMarker = createMarker(overlay, 'Vessel', VESSEL_COLOR, 'vessel');
@@ -133,9 +136,19 @@ export class SceneView {
     }
 
     this.vesselTrail.visible = this.vesselCache !== null;
-    if (this.vesselCache) writeLine(this.vesselTrail, this.vesselCache, origin, null, vesselFrame);
+    if (this.vesselCache) {
+      const span = this.vesselSpan;
+      writeLine(this.vesselTrail, this.vesselCache, origin, null, vesselFrame, {
+        rgb: HISTORY_RGB, headTime: null, tailTime: now, alpha: (t) => fade((now - t) / span),
+      });
+    }
     this.predictionLine.visible = this.predictionCache !== null && predictionEnd !== null;
-    if (this.predictionCache && predictionEnd) writeLine(this.predictionLine, this.predictionCache, origin, vesselFrame, predictionEnd);
+    if (this.predictionCache && predictionEnd) {
+      const span = this.sim.predictionHorizonSeconds;
+      writeLine(this.predictionLine, this.predictionCache, origin, vesselFrame, predictionEnd, {
+        rgb: PREDICTION_RGB, headTime: now, tailTime: this.sim.prediction.lastTime, alpha: (t) => fade((t - now) / span),
+      });
+    }
     this.updateThrustArrow(frameNow, sub(vesselFrame, origin), arrowLength);
 
     this.vesselMarker.classList.toggle('crashed', this.sim.impact !== null);
@@ -308,6 +321,37 @@ function setRenderPosition(target: THREE.Vector3, relative: Vec3): void {
   target.set(relative.x * RENDER_SCALE, relative.z * RENDER_SCALE, -relative.y * RENDER_SCALE);
 }
 
+const HISTORY_RGB = rgbOf(HISTORY_COLOR);
+const PREDICTION_RGB = rgbOf(PREDICTION_COLOR);
+
+function rgbOf(color: string): [number, number, number] {
+  const c = new THREE.Color(color);
+  return [c.r, c.g, c.b];
+}
+
+/** Opacity for a path vertex at fraction 0 (now) .. 1 (far end of its span). */
+function fade(fraction: number): number {
+  const f = Math.min(1, Math.max(0, fraction));
+  return FADE_FLOOR + (1 - FADE_FLOOR) * (1 - f) ** 1.5;
+}
+
+interface Fade {
+  rgb: readonly [number, number, number];
+  headTime: number | null;
+  tailTime: number | null;
+  alpha: (t: number) => number;
+}
+
+/** A line coloured per vertex with RGBA, for paths that fade with time. */
+function createFadingLine(): THREE.Line {
+  const line = createLine('#ffffff', 1);
+  const colors = new THREE.BufferAttribute(new Float32Array(1024 * 4), 4);
+  colors.setUsage(THREE.DynamicDrawUsage);
+  line.geometry.setAttribute('color', colors);
+  line.material = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false });
+  return line;
+}
+
 function createLine(color: string, opacity: number): THREE.Line {
   const geometry = new THREE.BufferGeometry();
   const attribute = new THREE.BufferAttribute(new Float32Array(1024 * 3), 3);
@@ -318,16 +362,27 @@ function createLine(color: string, opacity: number): THREE.Line {
   return line;
 }
 
-function writeLine(line: THREE.Line, cache: PathCache, origin: Vec3, head: Vec3 | null, tail: Vec3 | null): void {
-  const needed = cache.count + 2;
-  let attribute = line.geometry.getAttribute('position') as THREE.BufferAttribute;
+function ensureAttribute(line: THREE.Line, name: string, itemSize: number, needed: number): THREE.BufferAttribute {
+  let attribute = line.geometry.getAttribute(name) as THREE.BufferAttribute;
   if (attribute.count < needed) {
-    attribute = new THREE.BufferAttribute(new Float32Array(Math.max(needed, attribute.count * 2) * 3), 3);
+    attribute = new THREE.BufferAttribute(new Float32Array(Math.max(needed, attribute.count * 2) * itemSize), itemSize);
     attribute.setUsage(THREE.DynamicDrawUsage);
-    line.geometry.setAttribute('position', attribute);
+    line.geometry.setAttribute(name, attribute);
   }
-  const written = cache.writeRelative(attribute.array as Float32Array, origin, head, tail, RENDER_SCALE);
-  attribute.needsUpdate = true;
+  return attribute;
+}
+
+function writeLine(line: THREE.Line, cache: PathCache, origin: Vec3, head: Vec3 | null, tail: Vec3 | null, fading?: Fade): void {
+  const needed = cache.count + 2;
+  const positions = ensureAttribute(line, 'position', 3, needed);
+  const written = cache.writeRelative(positions.array as Float32Array, origin, head, tail, RENDER_SCALE);
+  positions.needsUpdate = true;
+  if (fading) {
+    const colors = ensureAttribute(line, 'color', 4, needed);
+    const coloured = cache.writeColors(colors.array as Float32Array, fading.headTime, fading.tailTime, fading.rgb, fading.alpha);
+    if (coloured !== written) throw new Error(`writeLine: ${written} positions but ${coloured} colours`);
+    colors.needsUpdate = true;
+  }
   line.geometry.setDrawRange(0, written);
 }
 
