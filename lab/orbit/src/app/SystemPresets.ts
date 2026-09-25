@@ -17,6 +17,11 @@ function spin(periodSeconds: number, obliquityDegrees: number, poleLongitudeDegr
   };
 }
 
+/** Synchronous rotation with the mean sidereal period; see LockedRotationSpec. */
+function locked(periodDays: number, obliquityToOrbitDegrees = 0) {
+  return { kind: 'locked' as const, periodSeconds: periodDays * SECONDS_PER_DAY, obliquityToOrbitRadians: obliquityToOrbitDegrees * DEGREES };
+}
+
 function orbit(aMeters: number, e: number, iDeg: number, nodeDeg: number, periDeg: number, meanDeg: number) {
   return {
     semiMajorAxisMeters: aMeters,
@@ -33,15 +38,15 @@ const HOUR = 3600;
 const galileanMoons = (): BodySpec[] => [
   {
     id: 'ember', name: 'Ember', massKg: 8.9319e22, radiusMeters: 1.8216e6, color: '#e8c35a',
-    rotation: spin(1.769 * SECONDS_PER_DAY, 0), orbit: orbit(4.217e8, 0.0041, 0.05, 43.9, 84.1, 342.0), children: [],
+    rotation: locked(1.769138), orbit: orbit(4.217e8, 0.0041, 0.05, 43.9, 84.1, 342.0), children: [],
   },
   {
     id: 'rime', name: 'Rime', massKg: 4.7998e22, radiusMeters: 1.5608e6, color: '#cfc6b4',
-    rotation: spin(3.551 * SECONDS_PER_DAY, 0), orbit: orbit(6.709e8, 0.009, 0.47, 219.1, 88.97, 171.0), children: [],
+    rotation: locked(3.551181), orbit: orbit(6.709e8, 0.009, 0.47, 219.1, 88.97, 171.0), children: [],
   },
   {
     id: 'hollow', name: 'Hollow', massKg: 1.4819e23, radiusMeters: 2.6341e6, color: '#9c8f80',
-    rotation: spin(7.155 * SECONDS_PER_DAY, 0), orbit: orbit(1.0704e9, 0.0013, 0.2, 63.55, 192.4, 317.5), children: [],
+    rotation: locked(7.154553), orbit: orbit(1.0704e9, 0.0013, 0.2, 63.55, 192.4, 317.5), children: [],
   },
 ];
 
@@ -63,8 +68,12 @@ export const SOL_SYSTEM: SystemSpec = {
         children: [
           {
             id: 'selene', name: 'Selene', massKg: 7.342e22, radiusMeters: 1.7374e6, color: '#b8b8b0',
-            rotation: spin(27.321661 * SECONDS_PER_DAY, 6.68, 90),
-            orbit: orbit(3.844e8, 0.0549, 5.145, 125.08, 318.15, 135.27), children: [],
+            // Real sidereal month and pole tilt. The initial semi-major axis is
+            // tuned so that, perturbed by the Sun, the simulated mean month is
+            // the real 27.3217 d (mean distance then 384,830 km; the unperturbed
+            // 384,400 km gives 27.64 d).
+            rotation: locked(27.321661, 6.68),
+            orbit: orbit(3.814869e8, 0.0549, 5.145, 125.08, 318.15, 135.27), children: [],
           },
         ],
       },
@@ -107,7 +116,7 @@ export const BINARY_SYSTEM: SystemSpec = {
         children: [
           {
             id: 'lumen', name: 'Lumen', massKg: 6.1e22, radiusMeters: 1.65e6, color: '#c4c0b6',
-            rotation: spin(24.2 * SECONDS_PER_DAY, 3),
+            rotation: locked(18.3679),
             orbit: orbit(2.9e8, 0.04, 4.6, 80, 200, 12), children: [],
           },
         ],
@@ -119,11 +128,11 @@ export const BINARY_SYSTEM: SystemSpec = {
         children: [
           {
             id: 'crown-i', name: 'Crown I', massKg: 5.5e22, radiusMeters: 1.6e6, color: '#d9c7a0',
-            rotation: spin(2.4 * SECONDS_PER_DAY, 0), orbit: orbit(5.2e8, 0.006, 0.3, 10, 50, 100), children: [],
+            rotation: locked(3.04703), orbit: orbit(5.2e8, 0.006, 0.3, 10, 50, 100), children: [],
           },
           {
             id: 'crown-ii', name: 'Crown II', massKg: 1.1e23, radiusMeters: 2.3e6, color: '#8fa7c2',
-            rotation: spin(6.1 * SECONDS_PER_DAY, 0), orbit: orbit(9.4e8, 0.011, 0.7, 170, 240, 300), children: [],
+            rotation: locked(7.40538), orbit: orbit(9.4e8, 0.011, 0.7, 170, 240, 300), children: [],
           },
         ],
       },

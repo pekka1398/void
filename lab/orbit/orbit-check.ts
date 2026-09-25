@@ -409,6 +409,28 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
   check('start below surface panics', throws(() => crash.advance(10, 100)), 'throws');
 }
 
+// --- Tidally locked moons ----------------------------------------------------------
+{
+  const system = buildSystem(SYSTEM_PRESETS.sol);
+  const eph = new Ephemeris(system, { stepSeconds: suggestedStepSeconds(system.bodies, STEPS_PER_ORBIT), chunkSteps: 2048 });
+  eph.extendTo(SECONDS_PER_JULIAN_YEAR);
+  const facingError = (id: string, t: number): number => {
+    const moon = system.bodies.find((b) => b.id === id)!;
+    const d = subVec(eph.bodyPosition(moon.parentIndex!, t), eph.bodyPosition(moon.index, t));
+    const axes = bodyOrientation(moon, t);
+    return Math.atan2(dot(d, axes.y), dot(d, axes.x)) / DEGREES;
+  };
+  const selene = system.bodies.find((b) => b.id === 'selene')!;
+  const tiltToEcliptic = selene.rotation.obliquityRadians / DEGREES;
+  let worstMoon = 0, worstEmber = 0;
+  for (let t = 0; t <= SECONDS_PER_JULIAN_YEAR; t += SECONDS_PER_DAY / 4) {
+    worstMoon = Math.max(worstMoon, Math.abs(facingError('selene', t)));
+    worstEmber = Math.max(worstEmber, Math.abs(facingError('ember', t)));
+  }
+  check('tidally locked moons', Math.abs(tiltToEcliptic - (6.68 - 5.145)) < 1e-9 && worstMoon < 9 && worstEmber < 2,
+    `Selene equator ${tiltToEcliptic.toFixed(3)} deg from the ecliptic; over a year the near side stays within ${worstMoon.toFixed(1)} deg of Aurelia (Ember ${worstEmber.toFixed(1)} deg of Velvet)`);
+}
+
 // --- Thrust, rocket equation, finite burns -------------------------------------
 {
   // Deep space: 1e13 m from the only body, gravity ~4e-12 m/s^2.

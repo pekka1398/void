@@ -75,4 +75,6 @@ Defaults chosen from measurements in `orbit-check.ts`:
 ## Fixtures (`src/app/SystemPresets.ts`)
 
 - `sol`: real Sun, Mercury, Earth, Moon, Mars, Jupiter and three Galilean moons, under fictional names.
+  - The moons are tidally locked (`LockedRotationSpec`). Each spins at its real mean sidereal period, and its spin axis follows from its orbit: Selene's lies 6.68° from its orbit normal, on the far side of ecliptic north (Cassini state), so its equator is 1.54° from the ecliptic. Its near side faces the parent's mean direction, and over a year it stays within 8° of Aurelia (the real libration is ±7.9°).
+  - Selene's initial semi-major axis is 381,487 km rather than the mean distance 384,400 km. Perturbed by the Sun, it then gives the real 27.3217-day sidereal month and a mean distance of 384,830 km. Starting at 384,400 km gives 27.64 days.
 - `binary`: a circumbinary system in the spirit of the game's Astris Prime, using real-scale bodies.
