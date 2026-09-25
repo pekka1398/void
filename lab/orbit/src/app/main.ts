@@ -5,7 +5,7 @@ import {
 } from '../orbit';
 import { CameraRig } from './CameraRig';
 import { formatDistance, formatDuration, formatSpeed, formatWarp } from './Format';
-import { Panel, PREDICTION_SPANS, TRAIL_SPANS, VESSEL_SPANS, type BurnEditor, type PlanRow } from './Panel';
+import { Panel, PLAN_COAST_SPANS, PREDICTION_SPANS, TRAIL_SPANS, VESSEL_SPANS, type BurnEditor, type PlanRow } from './Panel';
 import { RENDER_SCALE, SceneView, type Focus, type TrajectoryEvent } from './SceneView';
 import { SYSTEM_PRESETS, type SystemPresetId } from './SystemPresets';
 
@@ -58,6 +58,7 @@ const systemId = systemParam as SystemPresetId;
 let trailSpan = TRAIL_SPANS[2]![1];
 let vesselSpan = VESSEL_SPANS[1]![1];
 const predictionSpan = PREDICTION_SPANS[1]![1];
+const planCoast = PLAN_COAST_SPANS[3]![1];
 const sim = new Simulation({
   system: SYSTEM_PRESETS[systemId],
   stepsPerOrbit: 256,
@@ -67,6 +68,7 @@ const sim = new Simulation({
   engine: { thrustNewtons: 250e3, specificImpulseSeconds: 350, dryMassKg: 10e3, fuelMassKg: 30e3 },
   retentionSeconds: Math.max(trailSpan, vesselSpan) + RETENTION_MARGIN_SECONDS,
   predictionHorizonSeconds: predictionSpan,
+  planCoastSeconds: planCoast,
 });
 const home = sim.bodyIndex(HOME_BODY[systemId]);
 let frame: FrameSpec = { kind: 'body-inertial', body: home };
@@ -90,7 +92,7 @@ const camera = new THREE.PerspectiveCamera(50, 1, 1, 2);
 const rig = new CameraRig(renderer.domElement, 60_000, 5e10);
 const view = new SceneView(sim, overlay, frame, trailSpan, vesselSpan, (picked) => setFocus(picked));
 
-const panel = new Panel(document.body, sim.system.bodies, { frame, focus, trailSpan, vesselSpan, predictionSpan, system: systemId }, {
+const panel = new Panel(document.body, sim.system.bodies, { frame, focus, trailSpan, vesselSpan, predictionSpan, planCoast, system: systemId }, {
   frame(spec) { frame = spec; view.setFrame(spec); },
   focus(next) { setFocus(next); },
   trailSpan(s) { trailSpan = s; view.setTrailSpan(s); updateRetention(); },
@@ -123,6 +125,7 @@ const panel = new Panel(document.body, sim.system.bodies, { frame, focus, trailS
     planMessage = placement.ok ? null : { text: placement.reason, until: performance.now() + PLAN_MESSAGE_SECONDS * 1000 };
   },
   planReference(body) { editSelected((spec) => ({ ...spec, referenceBody: body })); },
+  planCoast(s) { sim.plan.coastSeconds = s; },
   planDeltaV(component, value) { editSelected((spec) => ({ ...spec, [component]: value })); },
 });
 panel.showAttitude(sim.attitudeMode);
@@ -290,9 +293,12 @@ function updateText(warp: number): void {
       '',
       `prediction to T+ ${formatDuration(sim.prediction.lastTime)} (${formatDuration(sim.prediction.lastTime - sim.time)} ahead)`,
     );
-    for (const apsis of findApsides(sim.prediction, eph, ref, sim.time, MAX_APSIDES)) {
+    const apsisRef = apsisBody(ref);
+    const apsisRadius = sim.system.bodies[apsisRef]!.radiusMeters;
+    lines.push(`  apsides about ${sim.system.bodies[apsisRef]!.name}:`);
+    for (const apsis of findApsides(sim.prediction, eph, apsisRef, sim.time, MAX_APSIDES)) {
       const short = apsis.kind === 'periapsis' ? 'Pe' : 'Ap';
-      const altitude = formatDistance(apsis.distanceMeters - R);
+      const altitude = formatDistance(apsis.distanceMeters - apsisRadius);
       lines.push(`  ${short} ${altitude.padStart(13)}  in ${formatDuration(apsis.time - sim.time)}`);
       events.push({ kind: apsis.kind, plan: false, time: apsis.time, position: apsis.position, label: `${short} ${altitude}` });
     }
@@ -306,6 +312,14 @@ function updateText(warp: number): void {
   if (!sim.impact) lines.push(...planReadout(events));
   view.setEvents(events);
   panel.setReadout(lines.join('\n'));
+}
+
+/**
+ * Apsides are measured from the body the view is centred on, as in
+ * Principia: centring on a moon shows the plan's periapsis there.
+ */
+function apsisBody(fallback: number): number {
+  return frame.kind === 'body-inertial' || frame.kind === 'body-surface' ? frame.body : fallback;
 }
 
 /** Readout lines for the plan beyond its last burn; adds burn and plan apsis markers. */
@@ -330,7 +344,7 @@ function planReadout(events: TrajectoryEvent[]): string[] {
     }
   });
   if (!last) return lines;
-  const ref = plan.maneuver(burns.length - 1).referenceBody;
+  const ref = apsisBody(plan.maneuver(burns.length - 1).referenceBody);
   const body = sim.system.bodies[ref]!;
   const from = Math.max(sim.time, last.endTime);
   if (trajectory.count > 1 && trajectory.lastTime > from) {

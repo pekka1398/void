@@ -17,11 +17,15 @@ export const PREDICTION_SPANS: readonly [string, number][] = [
   ['30 d', 30 * SECONDS_PER_DAY], ['90 d', 90 * SECONDS_PER_DAY], ['1 y', 365.25 * SECONDS_PER_DAY],
 ];
 
-const TIME_NUDGES: readonly [string, number][] = [
-  ['−1d', -SECONDS_PER_DAY], ['−1h', -HOUR], ['−10m', -600], ['−1m', -60], ['−10s', -10],
-  ['+10s', 10], ['+1m', 60], ['+10m', 600], ['+1h', HOUR], ['+1d', SECONDS_PER_DAY],
+export const PLAN_COAST_SPANS: readonly [string, number][] = [
+  ['12 h', 12 * HOUR], ['1 d', SECONDS_PER_DAY], ['3 d', 3 * SECONDS_PER_DAY], ['7 d', 7 * SECONDS_PER_DAY],
+  ['30 d', 30 * SECONDS_PER_DAY], ['90 d', 90 * SECONDS_PER_DAY], ['1 y', 365.25 * SECONDS_PER_DAY],
 ];
-const DV_STEPS = [0.1, 1, 10, 100, 1000] as const;
+const TIME_NUDGES: readonly [string, number][] = [
+  ['−1d', -SECONDS_PER_DAY], ['−1h', -HOUR], ['−10m', -600], ['−1m', -60], ['−10s', -10], ['−1s', -1],
+  ['+1s', 1], ['+10s', 10], ['+1m', 60], ['+10m', 600], ['+1h', HOUR], ['+1d', SECONDS_PER_DAY],
+];
+const DV_STEPS = [0.01, 0.1, 1, 10, 100, 1000] as const;
 export type DeltaVComponent = 'prograde' | 'normal' | 'radial';
 const DV_COMPONENTS: readonly [DeltaVComponent, string][] = [['prograde', 'Prograde'], ['normal', 'Normal'], ['radial', 'Radial']];
 
@@ -66,6 +70,7 @@ export interface PanelHandlers {
   planSnap(kind: 'periapsis' | 'apoapsis'): void;
   planReference(body: number): void;
   planDeltaV(component: DeltaVComponent, value: number): void;
+  planCoast(seconds: number): void;
 }
 
 type FrameKind = FrameSpec['kind'];
@@ -95,7 +100,7 @@ export class Panel {
   constructor(
     root: HTMLElement,
     bodies: readonly CelestialBody[],
-    initial: { frame: FrameSpec; focus: Focus; trailSpan: number; vesselSpan: number; predictionSpan: number; system: SystemPresetId },
+    initial: { frame: FrameSpec; focus: Focus; trailSpan: number; vesselSpan: number; predictionSpan: number; planCoast: number; system: SystemPresetId },
     handlers: PanelHandlers,
   ) {
     this.element = document.createElement('div');
@@ -128,6 +133,7 @@ export class Panel {
       <label>Reference <select data-k="reference"><option value="auto">Auto (sphere of influence)</option>${bodyOptions}</select></label>
       <label>Prediction <select data-k="horizon">${spanOptions(PREDICTION_SPANS, initial.predictionSpan)}</select></label>
       <div class="section">FLIGHT PLAN</div>
+      <label>Coast after last burn <select data-k="plan-coast">${spanOptions(PLAN_COAST_SPANS, initial.planCoast)}</select></label>
       <div class="plan-list"></div>
       <div class="plan-buttons">
         <button data-k="plan-add">+ Burn</button><button data-k="plan-remove">Delete</button><button data-k="plan-warp">Warp to burn</button>
@@ -192,6 +198,7 @@ export class Panel {
     q<HTMLButtonElement>('plan-add').addEventListener('click', () => handlers.planAdd());
     this.removeButton.addEventListener('click', () => handlers.planRemove());
     this.warpButton.addEventListener('click', () => handlers.planWarp());
+    q<HTMLSelectElement>('plan-coast').addEventListener('change', (e) => handlers.planCoast(Number((e.target as HTMLSelectElement).value)));
     this.burnReference.addEventListener('change', () => handlers.planReference(Number(this.burnReference.value)));
     for (const button of this.planEditor.querySelectorAll<HTMLButtonElement>('[data-shift]')) {
       button.addEventListener('click', () => handlers.planShift(Number(button.dataset.shift)));

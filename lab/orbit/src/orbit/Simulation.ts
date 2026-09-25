@@ -35,6 +35,8 @@ export interface SimulationOptions {
   /** Past interval kept in the ephemeris and the vessel history, seconds. */
   retentionSeconds: number;
   predictionHorizonSeconds: number;
+  /** Coast after the last planned burn. */
+  planCoastSeconds: number;
 }
 
 export type AttitudeMode = 'prograde' | 'retrograde' | 'normal' | 'antinormal' | 'radial-out' | 'radial-in' | 'hold';
@@ -111,7 +113,7 @@ export class Simulation {
     this.horizon = checkedPositive(options.predictionHorizonSeconds, 'prediction horizon');
     this.plan = new FlightPlan(this.ephemeris, options.tolerances, {
       thrustNewtons: this.engine.thrustNewtons, exhaustVelocity: this.exhaustVelocity, dryMassKg: this.engine.dryMassKg,
-    }, this.horizon);
+    }, options.planCoastSeconds);
     this.run = this.startRun();
     this.plan.rebase(this.run);
     this.restartPrediction();
@@ -135,7 +137,6 @@ export class Simulation {
 
   set predictionHorizonSeconds(value: number) {
     this.horizon = checkedPositive(value, 'prediction horizon');
-    this.plan.coastSeconds = this.horizon;
   }
 
   /** The planned burn flying right now, if any. */

@@ -366,7 +366,7 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
   const sim = new Simulation({
     system: SYSTEM_PRESETS.sol, stepsPerOrbit: STEPS_PER_ORBIT, tolerances: TOLERANCES,
     vesselStart: { homeBodyId: 'aurelia', altitudeMeters: 400e3, inclinationRadians: 0 },
-    retentionSeconds: 2 * SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: 3600,
+    retentionSeconds: 2 * SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: 3600, planCoastSeconds: 3600,
   });
   const positions = new Float64Array(sim.ephemeris.bodyCount * 3);
   sim.ephemeris.positionsAt(0, positions);
@@ -404,7 +404,7 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
   const crash = new Simulation({
     system: SYSTEM_PRESETS.sol, stepsPerOrbit: STEPS_PER_ORBIT, tolerances: TOLERANCES,
     vesselStart: { homeBodyId: 'aurelia', altitudeMeters: -1e3, inclinationRadians: 0 },
-    retentionSeconds: SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: 3600,
+    retentionSeconds: SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: 3600, planCoastSeconds: 3600,
   });
   check('start below surface panics', throws(() => crash.advance(10, 100)), 'throws');
 }
@@ -508,7 +508,7 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
   const sim = new Simulation({
     system: SYSTEM_PRESETS.sol, stepsPerOrbit: STEPS_PER_ORBIT, tolerances: TOLERANCES,
     vesselStart: { homeBodyId: 'aurelia', altitudeMeters: 400e3, inclinationRadians: 0 },
-    retentionSeconds: SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: 6 * 3600,
+    retentionSeconds: SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: 6 * 3600, planCoastSeconds: 3600,
   });
   const home = sim.bodyIndex('aurelia');
   check('navigation reference', sim.navigationReference() === home, 'auto reference is Aurelia in LEO');
@@ -545,7 +545,7 @@ function planSim(horizon: number): Simulation {
   return new Simulation({
     system: SYSTEM_PRESETS.sol, stepsPerOrbit: STEPS_PER_ORBIT, tolerances: TOLERANCES,
     vesselStart: { homeBodyId: 'aurelia', altitudeMeters: 400e3, inclinationRadians: 0 },
-    retentionSeconds: SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: horizon,
+    retentionSeconds: SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: horizon, planCoastSeconds: horizon,
   });
 }
 function finishPlan(sim: Simulation): void {
