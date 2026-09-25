@@ -1,4 +1,4 @@
-import { bodyOrientation } from './BodyRotation';
+import { bodyOrientation, equatorialAxes } from './BodyRotation';
 import { STANDARD_GRAVITY } from './Constants';
 import { DominanceTree } from './Dominance';
 import { Ephemeris, suggestedStepSeconds } from './Ephemeris';
@@ -13,6 +13,7 @@ import {
 export interface VesselStartSpec {
   homeBodyId: string;
   altitudeMeters: number;
+  /** Relative to the home body's equator. */
   inclinationRadians: number;
 }
 
@@ -293,7 +294,7 @@ export class Simulation {
     const home = this.bodyIndex(this.vesselStart.homeBodyId);
     const body = this.system.bodies[home]!;
     const planet = this.ephemeris.bodyState(home, this.time);
-    const relative = stateFromElements({
+    const local = stateFromElements({
       semiMajorAxisMeters: body.radiusMeters + this.vesselStart.altitudeMeters,
       eccentricity: 0,
       inclinationRadians: this.vesselStart.inclinationRadians,
@@ -301,6 +302,14 @@ export class Simulation {
       argumentOfPeriapsisRadians: 0,
       meanAnomalyRadians: 0,
     }, body.gm);
+    // The elements are equatorial; rotate them into the ecliptic frame.
+    const axes = equatorialAxes(body);
+    const toEcliptic = (v: Vec3): Vec3 => ({
+      x: v.x * axes.x.x + v.y * axes.y.x + v.z * axes.z.x,
+      y: v.x * axes.x.y + v.y * axes.y.y + v.z * axes.z.y,
+      z: v.x * axes.x.z + v.y * axes.y.z + v.z * axes.z.z,
+    });
+    const relative = { position: toEcliptic(local.position), velocity: toEcliptic(local.velocity) };
     const run = new PropagationRun({
       time: this.time,
       position: add(planet.position, relative.position),

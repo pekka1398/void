@@ -70,7 +70,7 @@ export class Panel {
       </select></label>
       <label>Frame <select data-k="frame-kind">
         <option value="barycentric">Barycentric, inertial</option>
-        <option value="body-inertial">Body centred, inertial</option>
+        <option value="body-inertial">Body centred, equatorial</option>
         <option value="body-surface">Body surface, rotating</option>
         <option value="two-body-rotating">Two-body, rotating</option>
       </select></label>

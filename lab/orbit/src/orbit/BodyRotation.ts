@@ -10,15 +10,24 @@ export function spinAxis(body: CelestialBody): Vec3 {
 }
 
 /**
+ * Non-rotating equatorial axes (the body's ECI): z is the spin axis, x the
+ * equinox, i.e. the node of the equator on the ecliptic, (-sin lon, cos lon, 0).
+ * The node is defined for every obliquity, including zero.
+ */
+export function equatorialAxes(body: CelestialBody): Basis {
+  const pole = spinAxis(body);
+  const lon = body.rotation.poleLongitudeRadians;
+  const x: Vec3 = { x: -Math.sin(lon), y: Math.cos(lon), z: 0 };
+  return { x, y: cross(pole, x), z: pole };
+}
+
+/**
  * Body-fixed axes at time t: z is the spin axis, x the prime meridian on the
  * equator. The equator's reference direction is the node of the equator on
  * the ecliptic, (-sin lon, cos lon, 0), which is defined for every obliquity.
  */
 export function bodyOrientation(body: CelestialBody, t: number): Basis {
-  const pole = spinAxis(body);
-  const lon = body.rotation.poleLongitudeRadians;
-  const node: Vec3 = { x: -Math.sin(lon), y: Math.cos(lon), z: 0 };
-  const quadrature = cross(pole, node);
+  const { x: node, y: quadrature, z: pole } = equatorialAxes(body);
   const angle = body.rotation.angleAtEpochRadians + (2 * Math.PI * t) / body.rotation.periodSeconds;
   const c = Math.cos(angle);
   const s = Math.sin(angle);

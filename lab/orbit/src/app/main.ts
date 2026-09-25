@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { DEGREES, findApsides, osculatingOrbit, Simulation, sub, type AttitudeMode, type FrameSpec } from '../orbit';
+import { cross, DEGREES, dot, findApsides, length, osculatingOrbit, Simulation, spinAxis, sub, type AttitudeMode, type FrameSpec } from '../orbit';
 import { CameraRig } from './CameraRig';
 import { formatDistance, formatDuration, formatSpeed, formatWarp } from './Format';
 import { Panel, PREDICTION_SPANS, TRAIL_SPANS, VESSEL_SPANS } from './Panel';
@@ -214,6 +214,8 @@ function updateText(warp: number): void {
     const v = sub(vessel.velocity, { x: velocities[ref * 3]!, y: velocities[ref * 3 + 1]!, z: velocities[ref * 3 + 2]! });
     const osc = osculatingOrbit(r, v, body.gm);
     const R = body.radiusMeters;
+    const h = cross(r, v);
+    const equatorialInclination = Math.acos(Math.max(-1, Math.min(1, dot(h, spinAxis(body)) / length(h))));
     lines.push(
       '',
       `reference  ${body.name}${sim.referenceChoice === null ? ' (sphere of influence)' : ''}`,
@@ -221,7 +223,9 @@ function updateText(warp: number): void {
       `speed      ${formatSpeed(Math.hypot(v.x, v.y, v.z))}`,
       `osculating Pe ${formatDistance(osc.periapsisRadiusMeters - R)}`,
       `           Ap ${Number.isFinite(osc.apoapsisRadiusMeters) ? formatDistance(osc.apoapsisRadiusMeters - R) : 'none (escape)'}`,
-      `           e ${osc.eccentricity.toFixed(6)}  i ${(osc.inclinationRadians / DEGREES).toFixed(3)}°`,
+      `           e ${osc.eccentricity.toFixed(6)}`,
+      `           i ${(equatorialInclination / DEGREES).toFixed(3)}° to ${body.name} equator`,
+      `             ${(osc.inclinationRadians / DEGREES).toFixed(3)}° to ecliptic`,
       `           period ${formatDuration(osc.periodSeconds)}`,
       '',
       `prediction to T+ ${formatDuration(sim.prediction.lastTime)} (${formatDuration(sim.prediction.lastTime - sim.time)} ahead)`,

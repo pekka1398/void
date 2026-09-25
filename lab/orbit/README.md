@@ -17,7 +17,7 @@ The page uses a plain three.js `WebGLRenderer` with a logarithmic depth buffer. 
 - **System**: the fixture to load. Changing it reloads the page with `?system=sol|binary`.
 - **Frame**: the frame everything is plotted in:
   - barycentric inertial
-  - body centred inertial
+  - body centred inertial: equatorial axes (the body's ECI), with z along the spin axis and x at the equinox, where the equator crosses the ecliptic
   - body surface (rotating with the body, including its axial tilt)
   - two-body rotating: origin at the pair's barycenter, x from primary to secondary, z along their relative angular momentum.
 - **Focus**: the object the camera orbits. Clicking a label or pressing `Tab` also changes it.

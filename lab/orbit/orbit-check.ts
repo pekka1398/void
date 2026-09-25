@@ -1,6 +1,6 @@
 import { SYSTEM_PRESETS } from './src/app/SystemPresets';
 import {
-  DEGREES, FrameEvaluator, STANDARD_GRAVITY, Simulation, bodyOrientation, cross, dot, findApsides, normalize, toFrame,
+  DEGREES, FrameEvaluator, spinAxis, sub as subVec, STANDARD_GRAVITY, Simulation, bodyOrientation, cross, dot, findApsides, normalize, toFrame,
   type ThrustControl, Dopri5, Ephemeris, GRAVITATIONAL_CONSTANT, PropagationRun, SECONDS_PER_DAY,
   SECONDS_PER_JULIAN_YEAR, Trajectory, VesselPropagator, buildSystem, distance, length, orbitalPeriodSeconds,
   osculatingOrbit, solveKeplerElliptic, stateFromElements, sub, suggestedStepSeconds,
@@ -378,6 +378,20 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
     && at('aurelia', 5e9) === sim.bodyIndex('sol') && at('ember', 3e6) === sim.bodyIndex('ember'),
     'LEO -> Aurelia, near Selene -> Selene, far -> Sol, near Ember -> Ember');
 
+  {
+    const earth = sim.system.bodies[sim.bodyIndex('aurelia')]!;
+    const eci = new FrameEvaluator(sim.ephemeris, { kind: 'body-inertial', body: earth.index });
+    const f = eci.evaluate(0);
+    const pole = spinAxis(earth);
+    const poleInFrame = { x: dot(pole, f.axes.x), y: dot(pole, f.axes.y), z: dot(pole, f.axes.z) };
+    const vessel = sim.vessel;
+    const planet = sim.ephemeris.bodyState(earth.index, 0);
+    const h = cross(subVec(vessel.position, planet.position), subVec(vessel.velocity, planet.velocity));
+    const tiltFromEquator = Math.acos(dot(h, pole) / length(h)) / DEGREES;
+    const tiltFromEcliptic = Math.acos(h.z / length(h)) / DEGREES;
+    check('equatorial frame and start orbit', distance(poleInFrame, { x: 0, y: 0, z: 1 }) < 1e-15 && tiltFromEquator < 1e-9 && Math.abs(tiltFromEcliptic - 23.44) < 1e-9,
+      `spin axis is the frame's +z; start orbit ${tiltFromEquator.toExponential(1)} deg from the equator, ${tiltFromEcliptic.toFixed(2)} deg from the ecliptic`);
+  }
   const partial = sim.advance(SECONDS_PER_DAY, 50);
   check('budget-limited advance', !partial.completed && partial.steps === 50 && sim.time > 0 && sim.time < SECONDS_PER_DAY,
     `stopped at T+${sim.time.toFixed(1)} s after ${partial.steps} steps, time never skipped`);

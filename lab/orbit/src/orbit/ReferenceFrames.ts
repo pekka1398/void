@@ -1,10 +1,11 @@
-import { bodyOrientation, type Basis } from './BodyRotation';
+import { bodyOrientation, equatorialAxes, type Basis } from './BodyRotation';
 import type { Ephemeris } from './Ephemeris';
 import { cross, dot, normalize, sub, type Vec3 } from './Vec3';
 
 /** Plotting frames in the spirit of Principia's navigation frames. */
 export type FrameSpec =
   | { kind: 'barycentric' }
+  /** Body-centred, non-rotating, equatorial axes (ECI-like). */
   | { kind: 'body-inertial'; body: number }
   | { kind: 'body-surface'; body: number }
   | { kind: 'two-body-rotating'; primary: number; secondary: number };
@@ -77,7 +78,7 @@ export class FrameEvaluator {
     }
     if (spec.kind === 'body-inertial') {
       this.ephemeris.positionsAt(t, this.positions);
-      return { origin: this.position(spec.body), axes: ECLIPTIC_AXES };
+      return { origin: this.position(spec.body), axes: equatorialAxes(this.ephemeris.bodies[spec.body]!) };
     }
     if (spec.kind === 'body-surface') {
       this.ephemeris.positionsAt(t, this.positions);
