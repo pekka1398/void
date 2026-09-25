@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 import {
-  cross, DEGREES, distance, dot, findApsides, length, osculatingOrbit, Simulation, spinAxis, sub,
+  cross, DEGREES, distance, dot, SECONDS_PER_DAY, findApsides, length, osculatingOrbit, Simulation, spinAxis, sub,
   type AttitudeMode, type FrameSpec, type ManeuverSpec, type StartPlane,
 } from '../orbit';
 import { CameraRig } from './CameraRig';
 import { formatDistance, formatDuration, formatSpeed, formatWarp } from './Format';
-import { Panel, PLAN_COAST_SPANS, PREDICTION_SPANS, TRAIL_SPANS, VESSEL_SPANS, type BurnEditor, type PlanRow } from './Panel';
+import { Panel, PREDICTION_SPANS, TRAIL_SPANS, VESSEL_SPANS, type BurnEditor, type PlanRow } from './Panel';
 import { RENDER_SCALE, SceneView, type Focus, type TrajectoryEvent } from './SceneView';
 import { SYSTEM_PRESETS, type SystemPresetId } from './SystemPresets';
 
@@ -60,7 +60,7 @@ const systemId = systemParam as SystemPresetId;
 let trailSpan = TRAIL_SPANS[2]![1];
 let vesselSpan = VESSEL_SPANS[1]![1];
 const predictionSpan = PREDICTION_SPANS[1]![1];
-const planCoast = PLAN_COAST_SPANS[3]![1];
+const planCoast = 7 * SECONDS_PER_DAY;
 const sim = new Simulation({
   system: SYSTEM_PRESETS[systemId],
   stepsPerOrbit: 256,

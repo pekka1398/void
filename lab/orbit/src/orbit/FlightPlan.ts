@@ -86,9 +86,11 @@ export class FlightPlan {
     return this.coast;
   }
 
+  /** Lengthening keeps what is integrated and continues; shortening restarts. */
   set coastSeconds(value: number) {
-    this.coast = checkedCoast(value);
-    this.restart();
+    const shorter = checkedCoast(value) < this.coast;
+    this.coast = value;
+    if (shorter) this.restart();
   }
 
   get anchorTime(): number {

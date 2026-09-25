@@ -1,5 +1,6 @@
 import type { AttitudeMode, CelestialBody, FrameSpec } from '../orbit';
 import { SECONDS_PER_DAY } from '../orbit';
+import { formatDuration } from './Format';
 import type { Focus } from './SceneView';
 import type { SystemPresetId } from './SystemPresets';
 
@@ -17,10 +18,13 @@ export const PREDICTION_SPANS: readonly [string, number][] = [
   ['30 d', 30 * SECONDS_PER_DAY], ['90 d', 90 * SECONDS_PER_DAY], ['1 y', 365.25 * SECONDS_PER_DAY],
 ];
 
-export const PLAN_COAST_SPANS: readonly [string, number][] = [
-  ['12 h', 12 * HOUR], ['1 d', SECONDS_PER_DAY], ['3 d', 3 * SECONDS_PER_DAY], ['7 d', 7 * SECONDS_PER_DAY],
-  ['30 d', 30 * SECONDS_PER_DAY], ['90 d', 90 * SECONDS_PER_DAY], ['1 y', 365.25 * SECONDS_PER_DAY],
+const COAST_NUDGES: readonly [string, number][] = [
+  ['−1d', -SECONDS_PER_DAY], ['−1h', -HOUR], ['−10m', -600], ['−1m', -60],
+  ['+1m', 60], ['+10m', 600], ['+1h', HOUR], ['+1d', SECONDS_PER_DAY],
 ];
+/** Shortest coast the panel allows. */
+const MIN_COAST_SECONDS = 60;
+const COAST_WHEEL_SECONDS = 600;
 const TIME_NUDGES: readonly [string, number][] = [
   ['−1d', -SECONDS_PER_DAY], ['−1h', -HOUR], ['−10m', -600], ['−1m', -60], ['−10s', -10], ['−1s', -1],
   ['+1s', 1], ['+10s', 10], ['+1m', 60], ['+10m', 600], ['+1h', HOUR], ['+1d', SECONDS_PER_DAY],
@@ -99,6 +103,9 @@ export class Panel {
   private readonly removeButton: HTMLButtonElement;
   private readonly warpButton: HTMLButtonElement;
   private dvStep = 10;
+  private coastInput!: HTMLInputElement;
+  private coastText!: HTMLDivElement;
+  private coastSeconds = 0;
   private planListHtml = '';
 
   constructor(
@@ -142,7 +149,9 @@ export class Panel {
       <label>Prediction <select data-k="horizon">${spanOptions(PREDICTION_SPANS, initial.predictionSpan)}</select></label>
       <div class="section">FLIGHT PLAN</div>
       <label>Target <select data-k="plan-target"><option value="none">None</option>${bodyOptions}</select></label>
-      <label>Coast after last burn <select data-k="plan-coast">${spanOptions(PLAN_COAST_SPANS, initial.planCoast)}</select></label>
+      <label>Coast after last burn <span><input type="number" step="any" min="0" data-k="plan-coast"> d</span></label>
+      <div class="coast-nudge">${COAST_NUDGES.map(([label, s]) => `<button data-coast="${s}">${label}</button>`).join('')}</div>
+      <div class="coast-text"></div>
       <div class="plan-list"></div>
       <div class="plan-buttons">
         <button data-k="plan-add">+ Burn</button><button data-k="plan-remove">Delete</button><button data-k="plan-warp">Warp to burn</button>
@@ -210,7 +219,26 @@ export class Panel {
     const targetSelect = q<HTMLSelectElement>('plan-target');
     targetSelect.value = initial.planTarget === null ? 'none' : String(initial.planTarget);
     targetSelect.addEventListener('change', () => handlers.planTarget(targetSelect.value === 'none' ? null : Number(targetSelect.value)));
-    q<HTMLSelectElement>('plan-coast').addEventListener('change', (e) => handlers.planCoast(Number((e.target as HTMLSelectElement).value)));
+    this.coastInput = q('plan-coast');
+    this.coastText = this.element.querySelector('.coast-text')!;
+    const setCoast = (seconds: number) => {
+      this.showCoast(Math.max(MIN_COAST_SECONDS, seconds));
+      handlers.planCoast(this.coastSeconds);
+    };
+    this.coastInput.addEventListener('change', () => {
+      const days = Number(this.coastInput.value);
+      // An unparsable entry is a typing slip: show the current value again.
+      if (this.coastInput.value.trim() === '' || !Number.isFinite(days)) { this.showCoast(this.coastSeconds); return; }
+      setCoast(days * SECONDS_PER_DAY);
+    });
+    this.coastInput.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      setCoast(this.coastSeconds + (e.deltaY < 0 ? 1 : -1) * COAST_WHEEL_SECONDS);
+    }, { passive: false });
+    for (const button of this.element.querySelectorAll<HTMLButtonElement>('[data-coast]')) {
+      button.addEventListener('click', () => setCoast(this.coastSeconds + Number(button.dataset.coast)));
+    }
+    this.showCoast(initial.planCoast);
     this.burnReference.addEventListener('change', () => handlers.planReference(Number(this.burnReference.value)));
     for (const button of this.planEditor.querySelectorAll<HTMLButtonElement>('[data-shift]')) {
       button.addEventListener('click', () => handlers.planShift(Number(button.dataset.shift)));
@@ -284,6 +312,12 @@ export class Panel {
 
   showAttitude(mode: AttitudeMode): void {
     for (const [m, button] of this.attitudeButtons) button.classList.toggle('active', m === mode);
+  }
+
+  private showCoast(seconds: number): void {
+    this.coastSeconds = seconds;
+    this.coastInput.value = String(Number((seconds / SECONDS_PER_DAY).toFixed(5)));
+    this.coastText.textContent = `= ${formatDuration(seconds)} after the last burn`;
   }
 
   /** selected indexes rows; editor is null when nothing is selected. */
