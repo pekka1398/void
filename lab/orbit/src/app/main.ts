@@ -112,7 +112,7 @@ const panel = new Panel(document.body, sim.system.bodies, { frame, focus, trailS
   planAdd() {
     const last = sim.plan.burns[sim.plan.burns.length - 1];
     const startTime = Math.max(sim.time, last?.endTime ?? sim.time) + NEW_BURN_LEAD_SECONDS;
-    selectedBurn = sim.addManeuver({ startTime, referenceBody: sim.navigationReference(), prograde: 0, normal: 0, radial: 0 });
+    selectedBurn = sim.addManeuver({ startTime, referenceBody: sim.navigationReference(), referenceMode: 'auto', prograde: 0, normal: 0, radial: 0 });
   },
   planSelect(i) { selectedBurn = i; planMessage = null; },
   planRemove() {
@@ -131,7 +131,9 @@ const panel = new Panel(document.body, sim.system.bodies, { frame, focus, trailS
     const placement = sim.placeManeuverAtApsis(requireSelected(), kind);
     planMessage = placement.ok ? null : { text: placement.reason, until: performance.now() + PLAN_MESSAGE_SECONDS * 1000 };
   },
-  planReference(body) { editSelected((spec) => ({ ...spec, referenceBody: body })); },
+  planReference(body) {
+    editSelected((spec) => (body === 'auto' ? { ...spec, referenceMode: 'auto' } : { ...spec, referenceBody: body, referenceMode: 'fixed' }));
+  },
   planCoast(s) { sim.plan.coastSeconds = s; },
   planTarget(index) { planTarget = index; view.setTarget(index); },
   startPlane(value) {
@@ -436,7 +438,8 @@ function updatePlanPanel(nowMs: number): void {
     }
     if (planMessage && nowMs < planMessage.until) summary.push(`✕ ${planMessage.text}`);
     editor = {
-      index: i, referenceBody: spec.referenceBody, startTime: spec.startTime, prograde: spec.prograde, normal: spec.normal, radial: spec.radial,
+      index: i, referenceBody: spec.referenceBody, referenceAuto: spec.referenceMode === 'auto',
+      referenceName: sim.system.bodies[spec.referenceBody]!.name, startTime: spec.startTime, prograde: spec.prograde, normal: spec.normal, radial: spec.radial,
       summary: summary.join('\n'), ok: status.ok, editable: !(executing && i === 0),
     };
   }

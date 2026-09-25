@@ -2,13 +2,19 @@ import { findApsides } from './Apsides';
 import type { Ephemeris } from './Ephemeris';
 import { osculatingOrbit } from './Kepler';
 import { Trajectory } from './Trajectory';
-import { sub } from './Vec3';
+import { sub, type Vec3 } from './Vec3';
 import { PropagationRun, VesselPropagator, type ThrustControl, type Tolerances } from './VesselPropagator';
 
 /** A planned burn: Δv components along the Frenet axes relative to referenceBody. */
 export interface ManeuverSpec {
   startTime: number;
   referenceBody: number;
+  /**
+   * auto: whoever edits the plan keeps referenceBody on the body whose
+   * sphere of influence holds the planned trajectory at ignition
+   * (Simulation does this on every edit). fixed: referenceBody as given.
+   */
+  referenceMode: 'auto' | 'fixed';
   /** m/s along the velocity relative to the reference body. */
   prograde: number;
   /** m/s along the orbit normal r x v. */
@@ -40,6 +46,8 @@ export type ApsisPlacement = { ok: true; startTime: number } | { ok: false; reas
 
 /** Coasting steps allowed when searching for an apsis to centre a burn on. */
 const APSIS_SEARCH_MAX_STEPS = 200_000;
+/** Steps positionAt may spend integrating ahead; beyond this an edit would freeze the page. */
+const POSITION_MAX_STEPS = 1_000_000;
 
 /**
  * A sequence of burns executed at full thrust, and the trajectory they give
@@ -173,16 +181,38 @@ export class FlightPlan {
 
   /** Integrate the planned trajectory further by at most maxSteps accepted steps. */
   extend(maxSteps: number): void {
+    if (this.specs.length > 0) this.integrate(this.endTime, maxSteps);
+  }
+
+  /**
+   * Barycentric vessel position on the plan at t, integrating that far now.
+   * Null when the plan hits a surface before t or t precedes the plan.
+   */
+  positionAt(t: number): Vec3 | null {
     const run = this.run;
-    if (!run || this.specs.length === 0) return;
-    const end = this.endTime;
+    if (!run) throw new Error('FlightPlan: no anchor');
+    if (t < this.trajectory.firstTime) return null;
+    const before = this.propagator.acceptedSteps;
+    while (run.time < t && !run.impact) {
+      if (this.propagator.acceptedSteps - before > POSITION_MAX_STEPS) {
+        throw new Error(`FlightPlan: more than ${POSITION_MAX_STEPS} steps to reach T+${t}`);
+      }
+      this.integrate(t, 5000);
+    }
+    if (run.impact && run.impact.time < t) return null;
+    return this.trajectory.sample(t).position;
+  }
+
+  private integrate(end: number, maxSteps: number): void {
+    const run = this.run;
+    if (!run) return;
     let left = maxSteps;
     while (!run.impact && run.time < end && left > 0) {
       let legEnd = end;
       let control: ThrustControl | null = null;
       const burn = this.schedule.find((b) => b.endTime > run.time);
-      if (burn && run.time < burn.startTime) legEnd = burn.startTime;
-      else if (burn) { legEnd = burn.endTime; control = burn.control; }
+      if (burn && run.time < burn.startTime) legEnd = Math.min(end, burn.startTime);
+      else if (burn) { legEnd = Math.min(end, burn.endTime); control = burn.control; }
       const before = this.propagator.acceptedSteps;
       const outcome = this.propagator.advance(run, legEnd, left, this.trajectory, control);
       left -= this.propagator.acceptedSteps - before;
@@ -249,9 +279,10 @@ export class FlightPlan {
   }
 
   private checked(spec: ManeuverSpec): ManeuverSpec {
-    for (const [k, v] of Object.entries(spec)) {
-      if (!Number.isFinite(v)) throw new RangeError(`FlightPlan: maneuver ${k} = ${v}`);
+    for (const k of ['startTime', 'prograde', 'normal', 'radial'] as const) {
+      if (!Number.isFinite(spec[k])) throw new RangeError(`FlightPlan: maneuver ${k} = ${spec[k]}`);
     }
+    if (spec.referenceMode !== 'auto' && spec.referenceMode !== 'fixed') throw new RangeError(`FlightPlan: reference mode ${String(spec.referenceMode)}`);
     if (!Number.isInteger(spec.referenceBody) || spec.referenceBody < 0 || spec.referenceBody >= this.ephemeris.bodyCount) {
       throw new RangeError(`FlightPlan: reference body ${spec.referenceBody}`);
     }

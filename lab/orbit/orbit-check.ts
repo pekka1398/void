@@ -560,7 +560,7 @@ function finishPlan(sim: Simulation): void {
   const r1 = earth.radiusMeters + 400e3, r2 = earth.radiusMeters + 2000e3;
   const dv1 = Math.sqrt(earth.gm / r1) * (Math.sqrt((2 * r2) / (r1 + r2)) - 1);
   const dv2 = Math.sqrt(earth.gm / r2) * (1 - Math.sqrt((2 * r1) / (r1 + r2)));
-  const burn = (startTime: number, prograde: number) => ({ startTime, referenceBody: home, prograde, normal: 0, radial: 0 });
+  const burn = (startTime: number, prograde: number) => ({ startTime, referenceBody: home, referenceMode: 'fixed' as const, prograde, normal: 0, radial: 0 });
   sim.addManeuver(burn(600, dv1));
   finishPlan(sim);
   const first = sim.plan.burns[0]!;
@@ -594,7 +594,7 @@ function finishPlan(sim: Simulation): void {
 {
   const sim = planSim(3600);
   const home = sim.bodyIndex('aurelia');
-  const burn = (startTime: number, prograde: number) => ({ startTime, referenceBody: home, prograde, normal: 0, radial: 0 });
+  const burn = (startTime: number, prograde: number) => ({ startTime, referenceBody: home, referenceMode: 'fixed' as const, prograde, normal: 0, radial: 0 });
   sim.addManeuver(burn(600, 100));
   const b0 = sim.plan.burns[0]!;
   sim.addManeuver(burn(b0.endTime - 1, 100));
@@ -643,6 +643,27 @@ function finishPlan(sim: Simulation): void {
     check('start in a moon\'s orbit plane', distance(hm, hv) < 1e-12 && Math.abs(altitude - 400e3) < 1e-3
       && throws(() => { moonPlane.vesselStart = { ...moonPlane.vesselStart, plane: { kind: 'orbit-of', bodyId: 'ares' } }; moonPlane.resetVessel(); }),
       `orbit normal ${fmt(distance(hm, hv))} from Selene's, ${(altitude / 1e3).toFixed(3)} km up; a body not orbiting Aurelia is rejected`);
+  }
+  {
+    // Auto reference: a burn follows the sphere of influence at its ignition time.
+    const lunar = new Simulation({
+      system: SYSTEM_PRESETS.sol, stepsPerOrbit: STEPS_PER_ORBIT, tolerances: TOLERANCES,
+      vesselStart: { homeBodyId: 'aurelia', altitudeMeters: 400e3, plane: { kind: 'orbit-of', bodyId: 'selene' } },
+      retentionSeconds: SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: 3600, planCoastSeconds: 5 * SECONDS_PER_DAY,
+    });
+    const earthI = lunar.bodyIndex('aurelia'), moonI = lunar.bodyIndex('selene');
+    lunar.addManeuver({ startTime: 3300, referenceBody: earthI, referenceMode: 'fixed', prograde: 3120, normal: 0, radial: 0 });
+    const tliEnd = lunar.plan.burns[0]!.endTime;
+    finishPlan(lunar);
+    const flyby = findApsides(lunar.plan.trajectory, lunar.ephemeris, moonI, tliEnd, 1)[0]!;
+    const second = lunar.addManeuver({ startTime: tliEnd + 600, referenceBody: moonI, referenceMode: 'auto', prograde: -300, normal: 0, radial: 0 });
+    const nearEarth = lunar.plan.maneuver(second).referenceBody;
+    lunar.replaceManeuver(second, { ...lunar.plan.maneuver(second), startTime: flyby.time - 600 });
+    const nearMoon = lunar.plan.maneuver(second).referenceBody;
+    lunar.replaceManeuver(second, { ...lunar.plan.maneuver(second), referenceBody: earthI, referenceMode: 'fixed' });
+    const fixed = lunar.plan.maneuver(second).referenceBody;
+    check('auto burn reference', nearEarth === earthI && nearMoon === moonI && fixed === earthI,
+      `10 min after TLI: ${lunar.system.bodies[nearEarth]!.name}; at the flyby (${((flyby.distanceMeters - lunar.system.bodies[moonI]!.radiusMeters) / 1e3).toFixed(0)} km): ${lunar.system.bodies[nearMoon]!.name}; fixed stays ${lunar.system.bodies[fixed]!.name}`);
   }
   const sim2 = planSim(3600);
   sim2.advance(100, 1e6);

@@ -32,6 +32,9 @@ export interface PlanRow { text: string; ok: boolean }
 export interface BurnEditor {
   index: number;
   referenceBody: number;
+  /** The reference follows the sphere of influence at ignition. */
+  referenceAuto: boolean;
+  referenceName: string;
   /** Absolute mission time, s. */
   startTime: number;
   prograde: number;
@@ -67,7 +70,8 @@ export interface PanelHandlers {
   /** Absolute mission time of the selected burn's start. */
   planStart(time: number): void;
   planSnap(kind: 'periapsis' | 'apoapsis'): void;
-  planReference(body: number): void;
+  /** A body, or 'auto' for the sphere of influence at ignition. */
+  planReference(body: number | 'auto'): void;
   planDeltaV(component: DeltaVComponent, value: number): void;
   planCoast(seconds: number): void;
   /** A value from the startPlanes choices; resets the vessel. */
@@ -148,7 +152,7 @@ export class Panel {
         <button data-k="plan-add">+ Burn</button><button data-k="plan-remove">Delete</button><button data-k="plan-warp">Warp to burn</button>
       </div>
       <div class="plan-editor">
-        <label>Reference <select data-k="burn-ref">${bodyOptions}</select></label>
+        <label>Reference <select data-k="burn-ref"><option value="auto">Auto</option>${bodyOptions}</select></label>
         <label>Start T+ <span data-k="burn-start"></span></label>
         <div class="snap"><button data-snap="periapsis">@ next Pe</button><button data-snap="apoapsis">@ next Ap</button></div>
         ${DV_COMPONENTS.map(([c, label]) => `<label>${label} <span><span data-dv="${c}"></span> km/s</span></label>`).join('')}
@@ -213,7 +217,10 @@ export class Panel {
     this.coastField.set(initial.planCoast);
     this.startField = new DigitField(durationFormat(0, MAX_DAYS_SECONDS), (v) => handlers.planStart(v));
     q('burn-start').append(this.startField.element);
-    this.burnReference.addEventListener('change', () => handlers.planReference(Number(this.burnReference.value)));
+    this.burnReference.addEventListener('change', () => {
+      const v = this.burnReference.value;
+      handlers.planReference(v === 'auto' ? 'auto' : Number(v));
+    });
     for (const button of this.planEditor.querySelectorAll<HTMLButtonElement>('[data-snap]')) {
       button.addEventListener('click', () => handlers.planSnap(button.dataset.snap as 'periapsis' | 'apoapsis'));
     }
@@ -281,7 +288,10 @@ export class Panel {
     for (const control of this.planEditor.querySelectorAll<HTMLButtonElement | HTMLSelectElement>('button, select')) {
       control.disabled = !editor.editable;
     }
-    if (document.activeElement !== this.burnReference) this.burnReference.value = String(editor.referenceBody);
+    if (document.activeElement !== this.burnReference) {
+      this.burnReference.options[0]!.text = editor.referenceAuto ? `Auto → ${editor.referenceName}` : 'Auto';
+      this.burnReference.value = editor.referenceAuto ? 'auto' : String(editor.referenceBody);
+    }
     this.startField.setEnabled(editor.editable);
     this.startField.set(editor.startTime);
     for (const [component, field] of this.dvFields) {

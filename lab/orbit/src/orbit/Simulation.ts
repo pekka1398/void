@@ -166,19 +166,23 @@ export class Simulation {
   addManeuver(spec: ManeuverSpec): number {
     this.requirePlannable();
     if (!this.executingBurn) this.plan.rebase(this.run);
-    return this.plan.add(spec);
+    const i = this.plan.add(spec);
+    this.resolveReferences();
+    return i;
   }
 
   replaceManeuver(i: number, spec: ManeuverSpec): void {
     this.requireEditable(i);
     if (!this.executingBurn) this.plan.rebase(this.run);
     this.plan.replace(i, spec);
+    this.resolveReferences();
   }
 
   removeManeuver(i: number): void {
     this.requireEditable(i);
     if (!this.executingBurn) this.plan.rebase(this.run);
     this.plan.remove(i);
+    this.resolveReferences();
   }
 
   /** Move maneuver i so it is centred on the next apsis of the coast before it. */
@@ -186,7 +190,10 @@ export class Simulation {
     this.requireEditable(i);
     if (!this.executingBurn) this.plan.rebase(this.run);
     const placement = this.plan.startAtApsis(i, kind, this.time);
-    if (placement.ok) this.plan.replace(i, { ...this.plan.maneuver(i), startTime: placement.startTime });
+    if (placement.ok) {
+      this.plan.replace(i, { ...this.plan.maneuver(i), startTime: placement.startTime });
+      this.resolveReferences();
+    }
     return placement;
   }
 
@@ -364,6 +371,27 @@ export class Simulation {
       };
     }
     return this.history.sample(t).position;
+  }
+
+  /**
+   * Put every auto-reference burn on the body whose sphere of influence
+   * holds the plan at its ignition, in order: the trajectory up to burn i
+   * depends only on burns before it. A burn the plan cannot reach (in the
+   * past, after an impact, not executable) keeps its body; it cannot fire.
+   */
+  private resolveReferences(): void {
+    const positions = new Float64Array(this.ephemeris.bodyCount * 3);
+    for (let i = 0; i < this.plan.count; i += 1) {
+      const spec = this.plan.maneuver(i);
+      if (spec.referenceMode !== 'auto' || !this.plan.status(i).ok) continue;
+      // The burn in progress was resolved before it started.
+      if (i === 0 && this.executingBurn) continue;
+      const at = this.plan.positionAt(spec.startTime);
+      if (!at) continue;
+      this.ephemeris.positionsAt(spec.startTime, positions);
+      const body = this.dominance.dominant(positions, at);
+      if (body !== spec.referenceBody) this.plan.replace(i, { ...spec, referenceBody: body });
+    }
   }
 
   private requirePlannable(): void {
