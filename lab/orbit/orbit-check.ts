@@ -540,6 +540,104 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
   check('attitude hold is inertial', distance(sim.thrustDirection(), held) === 0, 'held direction unchanged after 20 min');
 }
 
+// --- Flight plan ------------------------------------------------------------------
+function planSim(horizon: number): Simulation {
+  return new Simulation({
+    system: SYSTEM_PRESETS.sol, stepsPerOrbit: STEPS_PER_ORBIT, tolerances: TOLERANCES,
+    vesselStart: { homeBodyId: 'aurelia', altitudeMeters: 400e3, inclinationRadians: 0 },
+    retentionSeconds: SECONDS_PER_DAY, engine: TEST_ENGINE, predictionHorizonSeconds: horizon,
+  });
+}
+function finishPlan(sim: Simulation): void {
+  for (let i = 0; i < 1000 && !sim.plan.complete; i += 1) sim.extendPlan(5000);
+  if (!sim.plan.complete) throw new Error('plan did not finish');
+}
+{
+  // Hohmann transfer 400 km -> 2000 km, burn 2 centred on the apoapsis burn 1 gives.
+  const sim = planSim(4 * 3600);
+  const home = sim.bodyIndex('aurelia');
+  const earth = sim.system.bodies[home]!;
+  const r1 = earth.radiusMeters + 400e3, r2 = earth.radiusMeters + 2000e3;
+  const dv1 = Math.sqrt(earth.gm / r1) * (Math.sqrt((2 * r2) / (r1 + r2)) - 1);
+  const dv2 = Math.sqrt(earth.gm / r2) * (1 - Math.sqrt((2 * r1) / (r1 + r2)));
+  const burn = (startTime: number, prograde: number) => ({ startTime, referenceBody: home, prograde, normal: 0, radial: 0 });
+  sim.addManeuver(burn(600, dv1));
+  finishPlan(sim);
+  const first = sim.plan.burns[0]!;
+  const apo = findApsides(sim.plan.trajectory, sim.ephemeris, home, first.endTime, 4).find((a) => a.kind === 'apoapsis')!;
+  sim.addManeuver(burn(apo.time, dv2));
+  const placed = sim.plan.startAtApsis(1, 'apoapsis', sim.time);
+  if (!placed.ok) throw new Error(placed.reason);
+  sim.replaceManeuver(1, burn(placed.startTime, dv2));
+  const second = sim.plan.burns[1]!;
+  const centreError = Math.abs(0.5 * (second.startTime + second.endTime) - apo.time);
+  check('burn centred on apoapsis', sim.plan.burns.length === 2 && centreError < 0.01,
+    `${(second.endTime - second.startTime).toFixed(2)} s burn centred ${fmt(centreError)} s from the apoapsis`);
+
+  finishPlan(sim);
+  const t = second.endTime + 1800;
+  const planned = sim.plan.trajectory.sample(t).position;
+  const m0 = sim.vessel.massKg;
+  while (sim.time < t) sim.advance(Math.min(37, t - sim.time), 1e6);
+  const flown = distance(planned, sim.vessel.position);
+  const expectedMass = m0 * Math.exp(-(dv1 + dv2) / sim.exhaustVelocity);
+  check('plan executes as predicted', sim.plan.count === 0 && sim.plan.completedCount === 2 && flown < 1
+    && Math.abs(sim.vessel.massKg / expectedMass - 1) < 1e-12,
+    `flown in 37 s pieces, ${fmt(flown)} m from the plan 30 min after burn 2; mass ${sim.vessel.massKg.toFixed(3)} kg as scheduled`);
+
+  const center = sim.ephemeris.bodyState(home, sim.time);
+  const osc = osculatingOrbit(subVec(sim.vessel.position, center.position), subVec(sim.vessel.velocity, center.velocity), earth.gm);
+  const a = osc.semiMajorAxisMeters;
+  check('Hohmann transfer', osc.eccentricity < 0.005 && Math.abs(a / r2 - 1) < 0.002,
+    `final orbit e ${osc.eccentricity.toFixed(5)}, a ${((a - earth.radiusMeters) / 1e3).toFixed(1)} km altitude (target 2000)`);
+}
+{
+  const sim = planSim(3600);
+  const home = sim.bodyIndex('aurelia');
+  const burn = (startTime: number, prograde: number) => ({ startTime, referenceBody: home, prograde, normal: 0, radial: 0 });
+  sim.addManeuver(burn(600, 100));
+  const b0 = sim.plan.burns[0]!;
+  sim.addManeuver(burn(b0.endTime - 1, 100));
+  const overlap = sim.plan.status(1);
+  sim.replaceManeuver(1, burn(b0.endTime + 60, 1e4));
+  const fuel = sim.plan.status(1);
+  sim.addManeuver(burn(1e5, 1));
+  const blocked = sim.plan.status(2);
+  check('plan validation', !overlap.ok && overlap.reason.includes('before burn 1') && !fuel.ok && fuel.reason.includes('needs')
+    && !blocked.ok && sim.plan.burns.length === 1,
+    `overlap: "${overlap.ok ? '' : overlap.reason}", fuel: "${fuel.ok ? '' : fuel.reason}", later: "${blocked.ok ? '' : blocked.reason}"`);
+  sim.removeManeuver(2);
+  sim.removeManeuver(1);
+
+  sim.setAttitude('radial-out');
+  sim.throttle = 1;
+  sim.advance(5, 1e6);
+  sim.throttle = 0;
+  sim.advance(1, 1e6);
+  const b1 = sim.plan.burns[0]!;
+  check('manual thrust replans', sim.plan.anchorTime === sim.time && sim.plan.count === 1 && b1.massBeforeKg < b0.massBeforeKg && b1.endTime - b1.startTime < b0.endTime - b0.startTime,
+    `plan re-anchored at T+${sim.plan.anchorTime.toFixed(1)} s, burn now ${(b1.endTime - b1.startTime).toFixed(3)} s (was ${(b0.endTime - b0.startTime).toFixed(3)} s)`);
+
+  sim.advance(600 - sim.time + 1, 1e6);
+  check('burn in progress', sim.executingBurn !== null && sim.effectiveThrottle === 1 && sim.throttle === 0
+    && throws(() => sim.replaceManeuver(0, burn(700, 50))) && throws(() => sim.removeManeuver(0)),
+    'flies at full thrust, cannot be edited or removed');
+  sim.throttle = 1;
+  sim.advance(1, 1e6);
+  check('planned burn overrides the throttle', sim.throttle === 0, 'manual throttle zeroed during the burn');
+
+  const sim2 = planSim(3600);
+  sim2.advance(100, 1e6);
+  sim2.addManeuver(burn(50, 10));
+  const past = sim2.plan.status(0);
+  const zero = planSim(3600);
+  zero.addManeuver(burn(60, 0));
+  zero.advance(120, 1e6);
+  check('past and zero burns', !past.ok && past.reason === 'starts in the past' && zero.plan.count === 0 && zero.plan.completedCount === 1
+    && zero.vessel.massKg === TEST_ENGINE.dryMassKg + TEST_ENGINE.fuelMassKg,
+    'a burn before now is rejected; a zero burn completes without using propellant');
+}
+
 if (failures.length > 0) {
   console.log(`\n${failures.length} CHECK(S) FAILED: ${failures.join(', ')}`);
   process.exit(1);

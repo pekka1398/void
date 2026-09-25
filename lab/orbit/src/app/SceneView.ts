@@ -13,6 +13,9 @@ const LABEL_HEIGHT = 13;
 const VESSEL_COLOR = '#7dffb0';
 const HISTORY_COLOR = '#ff5a5a';
 const PREDICTION_COLOR = '#4fc8ff';
+const PLAN_COLOR = '#ffc857';
+const BURN_COLOR = '#ff6a2a';
+const IMPACT_COLOR = '#ff5a5a';
 /** Lightness at the far end of a fading vessel path, as a fraction of the base colour. */
 const FADE_FLOOR = 0.12;
 
@@ -20,7 +23,9 @@ export type Focus = { kind: 'body'; index: number } | { kind: 'vessel' };
 
 /** A labelled point on a trajectory, drawn where the vessel will be at that time. */
 export interface TrajectoryEvent {
-  kind: 'periapsis' | 'apoapsis' | 'impact';
+  kind: 'periapsis' | 'apoapsis' | 'impact' | 'burn';
+  /** On the flight plan rather than the coast prediction. */
+  plan: boolean;
   time: number;
   /** Barycentric position at time. */
   position: Vec3;
@@ -44,6 +49,7 @@ export class SceneView {
   private readonly bodies: BodyView[];
   private readonly vesselTrail: THREE.Line;
   private readonly predictionLine: THREE.Line;
+  private readonly planLine: THREE.Line;
   private readonly thrustArrow: THREE.Line;
   private readonly vesselMarker: HTMLDivElement;
   private readonly eventMarkers: HTMLDivElement[] = [];
@@ -51,6 +57,8 @@ export class SceneView {
   private vesselCache: PathCache | null = null;
   private predictionCache: PathCache | null = null;
   private predictionGeneration = -1;
+  private planCache: PathCache | null = null;
+  private planGeneration = -1;
   private frame: FrameEvaluator;
   private trailSpan: number;
   private vesselSpan: number;
@@ -66,8 +74,9 @@ export class SceneView {
     this.bodies = sim.system.bodies.map((body) => this.createBody(body, onPick));
     this.vesselTrail = createFadingLine();
     this.predictionLine = createFadingLine();
+    this.planLine = createFadingLine();
     this.thrustArrow = createLine('#ff9a3c', 1);
-    this.scene.add(this.vesselTrail, this.predictionLine, this.thrustArrow);
+    this.scene.add(this.vesselTrail, this.predictionLine, this.planLine, this.thrustArrow);
     this.vesselMarker = createMarker(overlay, 'Vessel', VESSEL_COLOR, 'vessel');
     this.vesselMarker.addEventListener('click', () => onPick({ kind: 'vessel' }));
   }
@@ -99,6 +108,7 @@ export class SceneView {
     for (const view of this.bodies) view.cache = null;
     this.vesselCache = null;
     this.predictionCache = null;
+    this.planCache = null;
   }
 
   /** Frame-coordinate position of the focus at the current time. */
@@ -113,6 +123,7 @@ export class SceneView {
     this.updateTrailCaches(now);
     this.updateVesselCache(now);
     this.updatePredictionCache(now);
+    this.updatePlanCache(now);
     const predictionEnd = this.predictionEndFrame();
 
     const frameNow = this.frame.evaluate(now);
@@ -139,14 +150,28 @@ export class SceneView {
     if (this.vesselCache) {
       const span = this.vesselSpan;
       writeLine(this.vesselTrail, this.vesselCache, origin, null, vesselFrame, {
-        rgb: HISTORY_RGB, headTime: null, tailTime: now, lightness: (t) => fade((now - t) / span), presentFirst: false,
+        headTime: null, tailTime: now, shade: fadeShade(HISTORY_RGB, (t) => (now - t) / span), presentFirst: false,
       });
     }
     this.predictionLine.visible = this.predictionCache !== null && predictionEnd !== null;
     if (this.predictionCache && predictionEnd) {
       const span = this.sim.predictionHorizonSeconds;
       writeLine(this.predictionLine, this.predictionCache, origin, vesselFrame, predictionEnd, {
-        rgb: PREDICTION_RGB, headTime: now, tailTime: this.sim.prediction.lastTime, lightness: (t) => fade((t - now) / span), presentFirst: true,
+        headTime: now, tailTime: this.sim.prediction.lastTime, shade: fadeShade(PREDICTION_RGB, (t) => (t - now) / span), presentFirst: true,
+      });
+    }
+    this.planLine.visible = this.planCache !== null;
+    if (this.planCache) {
+      const plan = this.sim.plan;
+      const span = plan.endTime - now;
+      const coast = fadeShade(PLAN_RGB, (t) => (t - now) / span);
+      const burning = fadeShade(BURN_RGB, (t) => (t - now) / span);
+      const burns = plan.burns;
+      const tail = plan.trajectory.lastTime;
+      const tailPosition = toFrame(this.frame.evaluate(tail), plan.trajectory.position(plan.trajectory.count - 1));
+      writeLine(this.planLine, this.planCache, origin, vesselFrame, tailPosition, {
+        headTime: now, tailTime: tail, presentFirst: true,
+        shade: (t, out, offset) => (burns.some((b) => t >= b.startTime && t <= b.endTime) ? burning : coast)(t, out, offset),
       });
     }
     this.updateThrustArrow(frameNow, sub(vesselFrame, origin), arrowLength);
@@ -190,10 +215,13 @@ export class SceneView {
         marker.style.display = 'none';
         return;
       }
-      marker.className = `marker event ${event.kind}`;
+      marker.className = `marker event ${event.kind}${event.plan ? ' plan' : ''}`;
       marker.querySelector('span')!.textContent = event.label;
+      marker.querySelector('i')!.style.background = event.kind === 'impact' ? IMPACT_COLOR
+        : event.kind === 'burn' ? BURN_COLOR : event.plan ? PLAN_COLOR : PREDICTION_COLOR;
       const p = toFrame(this.frame.evaluate(event.time), event.position);
-      entries.push({ marker, relative: sub(p, origin), priority: 1e49 - i });
+      // Burns outrank apsides: a burn centred on an apsis sits on its marker.
+      entries.push({ marker, relative: sub(p, origin), priority: (event.kind === 'burn' ? 2e49 : 1e49) - i });
     });
     return entries;
   }
@@ -209,7 +237,7 @@ export class SceneView {
     a[3] = x + d.x * length; a[4] = z + d.z * length; a[5] = -(y + d.y * length);
     attribute.needsUpdate = true;
     this.thrustArrow.geometry.setDrawRange(0, 2);
-    const burning = this.sim.throttle > 0 && this.sim.fuelKg > 0;
+    const burning = this.sim.effectiveThrottle > 0;
     (this.thrustArrow.material as THREE.LineBasicMaterial).color.set(burning ? '#ff9a3c' : '#8a7a6a');
   }
 
@@ -252,6 +280,20 @@ export class SceneView {
       this.predictionCache = new PathCache(this.vesselInterval(now, this.sim.predictionHorizonSeconds));
     }
     this.predictionCache.update(now, prediction.lastTime, (t) => toFrame(this.frame.evaluate(t), prediction.sample(t).position));
+  }
+
+  private updatePlanCache(now: number): void {
+    const plan = this.sim.plan;
+    const trajectory = plan.trajectory;
+    if (this.sim.impact || plan.count === 0 || trajectory.count < 2 || trajectory.lastTime <= now) {
+      this.planCache = null;
+      return;
+    }
+    if (!this.planCache || this.planGeneration !== plan.generation) {
+      this.planGeneration = plan.generation;
+      this.planCache = new PathCache(this.vesselInterval(now, plan.endTime - now));
+    }
+    this.planCache.update(Math.max(now, trajectory.firstTime), trajectory.lastTime, (t) => toFrame(this.frame.evaluate(t), trajectory.sample(t).position));
   }
 
   private predictionEndFrame(): Vec3 | null {
@@ -323,6 +365,8 @@ function setRenderPosition(target: THREE.Vector3, relative: Vec3): void {
 
 const HISTORY_RGB = rgbOf(HISTORY_COLOR);
 const PREDICTION_RGB = rgbOf(PREDICTION_COLOR);
+const PLAN_RGB = rgbOf(PLAN_COLOR);
+const BURN_RGB = rgbOf(BURN_COLOR);
 
 function rgbOf(color: string): [number, number, number] {
   const c = new THREE.Color(color);
@@ -335,11 +379,20 @@ function fade(fraction: number): number {
   return FADE_FLOOR + (1 - FADE_FLOOR) * (1 - f) ** 1.5;
 }
 
+type Shade = (t: number, out: Float32Array, offset: number) => void;
+
+/** Base colour darkened by fade(fraction(t)). */
+function fadeShade(rgb: readonly [number, number, number], fraction: (t: number) => number): Shade {
+  return (t, out, offset) => {
+    const k = fade(fraction(t));
+    out[offset] = rgb[0] * k; out[offset + 1] = rgb[1] * k; out[offset + 2] = rgb[2] * k;
+  };
+}
+
 interface Fade {
-  rgb: readonly [number, number, number];
   headTime: number | null;
   tailTime: number | null;
-  lightness: (t: number) => number;
+  shade: Shade;
   /** The cache runs from the present outward; reverse it so the present is drawn last. */
   presentFirst: boolean;
 }
@@ -399,7 +452,7 @@ function writeLine(line: THREE.Line, cache: PathCache, origin: Vec3, head: Vec3 
   positions.needsUpdate = true;
   if (fading) {
     const colors = ensureAttribute(line, 'color', 3, needed);
-    const coloured = cache.writeColors(colors.array as Float32Array, fading.headTime, fading.tailTime, fading.rgb, fading.lightness);
+    const coloured = cache.writeColors(colors.array as Float32Array, fading.headTime, fading.tailTime, fading.shade);
     if (coloured !== written) throw new Error(`writeLine: ${written} positions but ${coloured} colours`);
     if (fading.presentFirst) {
       reverseVertices(positions.array as Float32Array, written, 3);

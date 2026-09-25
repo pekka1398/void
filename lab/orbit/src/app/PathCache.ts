@@ -57,19 +57,14 @@ export class PathCache {
   }
 
   /**
-   * Write RGB per vertex in the same order as writeRelative: the base colour
-   * scaled toward black by lightness(t) in [0, 1]. Returns the vertex count.
+   * Write RGB per vertex in the same order as writeRelative; shade writes
+   * the colour for time t at out[offset..offset+2]. Returns the vertex count.
    */
-  writeColors(out: Float32Array, headTime: number | null, tailTime: number | null, rgb: readonly [number, number, number], lightness: (t: number) => number): number {
+  writeColors(out: Float32Array, headTime: number | null, tailTime: number | null, shade: (t: number, out: Float32Array, offset: number) => void): number {
     let n = 0;
-    const put = (t: number) => {
-      const k = lightness(t);
-      out[n * 3] = rgb[0] * k; out[n * 3 + 1] = rgb[1] * k; out[n * 3 + 2] = rgb[2] * k;
-      n += 1;
-    };
-    if (headTime !== null) put(headTime);
-    for (let i = this.start; i < this.end; i += 1) put(this.times[i]!);
-    if (tailTime !== null) put(tailTime);
+    if (headTime !== null) shade(headTime, out, 3 * n++);
+    for (let i = this.start; i < this.end; i += 1) shade(this.times[i]!, out, 3 * n++);
+    if (tailTime !== null) shade(tailTime, out, 3 * n++);
     return n;
   }
 

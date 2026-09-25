@@ -53,6 +53,24 @@
       .marker.event span { color: #9fdcff; }
       .marker.impact i { background: #ff5a5a !important; }
       .marker.impact span { color: #ff8a8a; }
+      .marker.event.plan span { color: #ffd98a; }
+      .marker.burn span { color: #ffab80; }
+      .panel .plan-list > div { padding: 1px 4px; border-radius: 3px; cursor: pointer; white-space: pre; }
+      .panel .plan-list > div:hover { background: #1b2233; }
+      .panel .plan-list > div.selected { background: #3a2f16; color: #fff; }
+      .panel .plan-list > div.invalid { color: #ff8a8a; }
+      .panel .plan-list .empty { color: #8892a6; cursor: default; }
+      .panel .plan-buttons, .panel .snap { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
+      .panel .snap { grid-template-columns: repeat(2, 1fr); }
+      .panel .plan-buttons button, .panel .snap button, .panel .nudge button { margin: 3px 0 0; padding: 2px 0; }
+      .panel .nudge { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; margin: 4px 0 3px; }
+      .panel button:disabled, .panel input:disabled, .panel select:disabled { opacity: 0.4; cursor: default; }
+      .panel label.dv span { display: flex; align-items: center; gap: 3px; }
+      .panel label.dv button { width: 22px; margin: 0; padding: 0; }
+      .panel input[type=number] {
+        width: 82px; background: #141925; color: #dfe6f3; border: 1px solid #333c52; border-radius: 3px; font: inherit; text-align: right;
+      }
+      .panel pre.plan-summary.invalid { color: #ff8a8a; }
       kbd { padding: 0 4px; border: 1px solid #3a4256; border-radius: 3px; color: #9fb0d0; font-size: 11px; }
       .panic {
         position: fixed; inset: 12px; z-index: 9999; overflow: auto; margin: 0; padding: 20px;

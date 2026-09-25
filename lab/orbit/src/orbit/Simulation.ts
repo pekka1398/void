@@ -2,6 +2,7 @@ import { bodyOrientation, equatorialAxes } from './BodyRotation';
 import { STANDARD_GRAVITY } from './Constants';
 import { DominanceTree } from './Dominance';
 import { Ephemeris, suggestedStepSeconds } from './Ephemeris';
+import { FlightPlan, type ApsisPlacement, type BurnSchedule, type ManeuverSpec } from './FlightPlan';
 import { stateFromElements } from './Kepler';
 import { buildSystem, type BuiltSystem, type SystemSpec } from './SystemSpec';
 import { Trajectory } from './Trajectory';
@@ -62,6 +63,9 @@ export interface AdvanceReport {
   thrusted: boolean;
 }
 
+/** Relative mass mismatch at the end of a burn that counts as a bug, not rounding. */
+const BURN_MASS_TOLERANCE = 1e-9;
+
 /** Owns simulated time, the ephemeris, the one vessel, its controls and its prediction. */
 export class Simulation {
   readonly system: BuiltSystem;
@@ -72,6 +76,8 @@ export class Simulation {
   /** Coast prediction from the current state (engine assumed off). */
   readonly prediction = new Trajectory();
   readonly engine: EngineSpec;
+  /** Burns flown automatically at full thrust when their start time arrives. */
+  readonly plan: FlightPlan;
   private readonly predictor: VesselPropagator;
   private readonly vesselStart: VesselStartSpec;
   private retention: number;
@@ -103,7 +109,11 @@ export class Simulation {
     this.engine = checkedEngine(options.engine);
     this.retention = checkedPositive(options.retentionSeconds, 'retention');
     this.horizon = checkedPositive(options.predictionHorizonSeconds, 'prediction horizon');
+    this.plan = new FlightPlan(this.ephemeris, options.tolerances, {
+      thrustNewtons: this.engine.thrustNewtons, exhaustVelocity: this.exhaustVelocity, dryMassKg: this.engine.dryMassKg,
+    }, this.horizon);
     this.run = this.startRun();
+    this.plan.rebase(this.run);
     this.restartPrediction();
   }
 
@@ -125,6 +135,53 @@ export class Simulation {
 
   set predictionHorizonSeconds(value: number) {
     this.horizon = checkedPositive(value, 'prediction horizon');
+    this.plan.coastSeconds = this.horizon;
+  }
+
+  /** The planned burn flying right now, if any. */
+  get executingBurn(): BurnSchedule | null {
+    const burn = this.plan.burns[0];
+    if (!burn || this.impact) return null;
+    return burn.startTime <= this.run.time && this.run.time < burn.endTime ? burn : null;
+  }
+
+  /** Throttle the engine actually runs at: a planned burn overrides the manual throttle. */
+  get effectiveThrottle(): number {
+    if (this.executingBurn) return 1;
+    return this.fuelKg > 0 && !this.impact ? this.throttle : 0;
+  }
+
+  /** Append a maneuver. Plans from the current state unless a burn is flying. */
+  addManeuver(spec: ManeuverSpec): number {
+    this.requirePlannable();
+    if (!this.executingBurn) this.plan.rebase(this.run);
+    return this.plan.add(spec);
+  }
+
+  replaceManeuver(i: number, spec: ManeuverSpec): void {
+    this.requireEditable(i);
+    if (!this.executingBurn) this.plan.rebase(this.run);
+    this.plan.replace(i, spec);
+  }
+
+  removeManeuver(i: number): void {
+    this.requireEditable(i);
+    if (!this.executingBurn) this.plan.rebase(this.run);
+    this.plan.remove(i);
+  }
+
+  /** Move maneuver i so it is centred on the next apsis of the coast before it. */
+  placeManeuverAtApsis(i: number, kind: 'periapsis' | 'apoapsis'): ApsisPlacement {
+    this.requireEditable(i);
+    if (!this.executingBurn) this.plan.rebase(this.run);
+    const placement = this.plan.startAtApsis(i, kind, this.time);
+    if (placement.ok) this.plan.replace(i, { ...this.plan.maneuver(i), startTime: placement.startTime });
+    return placement;
+  }
+
+  /** Grow the planned trajectory by at most maxSteps. */
+  extendPlan(maxSteps: number): void {
+    if (!this.impact) this.plan.extend(maxSteps);
   }
 
   get predictionImpact(): { bodyIndex: number; time: number } | null {
@@ -174,7 +231,8 @@ export class Simulation {
   /** The direction the engine points right now. */
   thrustDirection(): Vec3 {
     const state = this.run.state;
-    return this.propagator.thrustDirection(this.attitudeLaw(), this.time, state.position, state.velocity);
+    const law = this.executingBurn?.control?.attitude ?? this.attitudeLaw();
+    return this.propagator.thrustDirection(law, this.time, state.position, state.velocity);
   }
 
   /** Put a fresh vessel with full tanks on its start orbit at the current time. */
@@ -183,6 +241,8 @@ export class Simulation {
     this.throttle = 0;
     this.history.clear();
     this.run = this.startRun();
+    this.plan.clear();
+    this.plan.rebase(this.run);
     this.restartPrediction();
   }
 
@@ -201,22 +261,45 @@ export class Simulation {
     while (!this.impact && this.run.time < target) {
       const left = maxSteps - (this.propagator.acceptedSteps - before);
       if (left <= 0) { completed = false; break; }
-      const control = this.activeControl();
+      const burn = this.plan.burns[0] ?? null;
+      let control: ThrustControl | null;
       let legEnd = target;
       let exhausts = false;
-      if (control) {
-        const burnout = this.run.time + (this.fuelKg * control.exhaustVelocity) / control.thrustNewtons;
-        if (burnout <= target) { legEnd = burnout; exhausts = true; }
-        thrusted = true;
+      let burnEnds = false;
+      const planned = burn !== null && burn.startTime <= this.run.time;
+      if (planned) {
+        // Burns that have been flown are removed, so this one is in progress.
+        control = burn.control;
+        this.throttle = 0;
+        if (burn.endTime <= target) { legEnd = burn.endTime; burnEnds = true; }
+      } else {
+        control = this.activeControl();
+        if (control) {
+          const burnout = this.run.time + (this.fuelKg * control.exhaustVelocity) / control.thrustNewtons;
+          if (burnout <= target) { legEnd = burnout; exhausts = true; }
+        }
+        if (burn && burn.startTime < legEnd) { legEnd = burn.startTime; exhausts = false; }
       }
+      if (control) thrusted = true;
       const outcome = this.propagator.advance(this.run, legEnd, left, this.history, control);
       if (outcome.kind === 'impact') {
         this.recordImpact(outcome.bodyIndex);
+        this.plan.clear();
         this.ephemeris.extendTo(target);
         this.time = target;
         break;
       }
+      // Manual thrust invalidates the plan's starting state; plan again from here.
+      if (!planned && control) this.plan.rebase(this.run);
       if (outcome.kind === 'budget') { completed = false; break; }
+      if (burnEnds) {
+        const residual = this.run.y[6]! - burn!.massAfterKg;
+        if (Math.abs(residual) > BURN_MASS_TOLERANCE * burn!.massBeforeKg) {
+          throw new Error(`Simulation: mass after planned burn differs from the schedule by ${residual} kg`);
+        }
+        this.run.y[6] = burn!.massAfterKg;
+        this.plan.completeFirst(this.run);
+      }
       if (exhausts) {
         // The leg ended exactly at burnout; remove only rounding from the mass.
         const residual = this.run.y[6]! - this.engine.dryMassKg;
@@ -230,6 +313,9 @@ export class Simulation {
     const horizonStart = this.time - this.retention;
     this.ephemeris.forgetBefore(horizonStart);
     this.history.trimBefore(horizonStart);
+    this.plan.trimBefore(this.time);
+    // A plan whose integration fell behind the vessel restarts from the vessel.
+    if (!this.impact && !this.executingBurn && this.plan.count > 0 && this.plan.computedUntil < this.time) this.plan.rebase(this.run);
     if (thrusted || this.impact || (this.predictionRun && this.prediction.lastTime < this.time)) this.restartPrediction();
     else this.prediction.trimBefore(this.time);
     return { completed, steps: this.propagator.acceptedSteps - before, thrusted };
@@ -258,6 +344,15 @@ export class Simulation {
       };
     }
     return this.history.sample(t).position;
+  }
+
+  private requirePlannable(): void {
+    if (this.impact) throw new Error('Simulation: cannot plan after an impact');
+  }
+
+  private requireEditable(i: number): void {
+    this.requirePlannable();
+    if (i === 0 && this.executingBurn) throw new Error('Simulation: the burn in progress cannot be edited');
   }
 
   private attitudeLaw(): AttitudeLaw {

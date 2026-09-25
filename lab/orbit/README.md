@@ -1,6 +1,6 @@
 # Orbit Lab
 
-Standalone experiment for Principia-style orbital mechanics: every massive body is integrated as one N-body problem, and the vessel moves only under gravity from all of them (plus thrust in a later phase). The lab does not use the game or `lab/lod`. Planets will be drawn as plain spheres.
+Standalone experiment for Principia-style orbital mechanics: every massive body is integrated as one N-body problem, and the vessel moves only under gravity from all of them (plus its own thrust). The lab does not use the game or `lab/lod`. Planets will be drawn as plain spheres.
 
 ```sh
 cd lab/orbit
@@ -35,6 +35,16 @@ The default stage is chemical: 250 kN of thrust, Isp 350 s, 10 t dry mass and 30
 - **Reference**: `Auto` uses the body whose sphere of influence contains the vessel. A fixed choice also drives the readout and the apsides.
 - **Prediction** (cyan): the coast trajectory from the current state with the engine off, extended by up to 4,000 steps per frame toward the chosen horizon. It restarts whenever the engine fires. Apsides are the actual extrema of distance to the reference body along that N-body trajectory, found where the radial velocity changes sign, rather than osculating values. They are marked on the path along with any predicted impact.
 
+### Flight plan (P4)
+
+A list of burns, each a Δv along prograde, normal and radial relative to a chosen **reference** body, and a start time. Every burn runs at full thrust; its duration comes from the rocket equation and the mass left by the burns before it. During the burn the direction follows the Frenet frame relative to the reference body, so the Δv delivered equals the one planned.
+
+- `+ Burn` adds a burn 10 minutes after now or after the last valid burn. Select a burn in the list to edit it: the time buttons shift its start, `@ next Pe` / `@ next Ap` centre it on the next apsis of the N-body coast before it, and the Δv fields accept typing, `−`/`+` or the mouse wheel in the chosen step.
+- Burns are checked in order. A burn that starts in the past, overlaps the previous one or needs more propellant than is left is marked ✕ with the reason, and every burn after it is blocked. Only the valid prefix is flown or drawn.
+- **Plan** (amber, burns orange): the trajectory through all valid burns, then a coast as long as the prediction horizon. It is integrated from the vessel's state at the time of the last edit, up to 4,000 steps per frame. Apsides after the last burn are marked, along with any impact.
+- Execution is automatic. At a burn's start time the engine runs at full thrust along the planned direction and the manual throttle is ignored. When the burn ends it leaves the list, and the rest of the plan continues from the new state. Manual thrust between burns re-plans from the new state, and burn durations follow the new mass.
+- `Warp to burn` runs at maximum warp to 30 s before the next valid burn, then drops to 1×. `Space`, `,` and `.` cancel it.
+
 ## Status
 
 | Phase | Scope | State |
@@ -42,7 +52,7 @@ The default stage is chemical: 250 kN of thrust, Isp 350 s, 10 t dry mass and 30
 | P1 | Ephemeris, vessel integrator, headless checks | done |
 | P2 | Viewer: system, trajectories, time warp, reference frames | done |
 | P3 | Vessel control, finite burns, prediction | done |
-| P4 | Flight plan (maneuver nodes) | next |
+| P4 | Flight plan: burns, plan trajectory, execution | done |
 
 ## Core (`src/orbit/`)
 
@@ -51,6 +61,7 @@ All values are SI. The frame is ecliptic and right-handed, with +Z at ecliptic n
 - `SystemSpec.ts` builds initial state vectors from a body tree. Each child's elements are **Jacobi** elements: its subtree barycenter orbits the barycenter of its parent plus all earlier siblings. Planets listed after a companion star therefore orbit the binary's barycenter. The whole system is shifted to zero barycenter and zero momentum.
 - `Ephemeris.ts` integrates the massive bodies with Yoshida's 8th-order symplectic composition, using a fixed step and Kahan-compensated positions. Every step stores position, velocity and acceleration, and any covered time is queried by quintic Hermite interpolation. Queries outside the integrated or retained interval throw. `forgetBefore` releases old chunks.
 - `VesselPropagator.ts` integrates a massless vessel with adaptive Dormand–Prince 5(4) under absolute per-step position and velocity tolerances. Runs can be resumed with a step budget, and a budgeted run reproduces an uninterrupted one bit for bit. Surface impacts are screened along each step and then bisected with real integrated states to 0.1 ms.
+- `FlightPlan.ts` turns planned burns into full-thrust schedules and checks them. It integrates the planned trajectory with the same propagator, and places a burn centred on an apsis. `Simulation.ts` flies the schedule, splitting integration legs exactly at burn start and end.
 - `Kepler.ts` provides strict element/state conversion and osculating quantities. Hyperbolic and radial orbits report infinite apoapsis or period rather than invented values.
 
 Defaults chosen from measurements in `orbit-check.ts`:

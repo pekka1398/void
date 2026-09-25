@@ -11,3 +11,4 @@ export * from './ReferenceFrames';
 export * from './Dominance';
 export * from './Simulation';
 export * from './Apsides';
+export * from './FlightPlan';

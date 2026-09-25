@@ -1,14 +1,23 @@
 import * as THREE from 'three';
-import { cross, DEGREES, dot, findApsides, length, osculatingOrbit, Simulation, spinAxis, sub, type AttitudeMode, type FrameSpec } from '../orbit';
+import {
+  cross, DEGREES, dot, findApsides, length, osculatingOrbit, Simulation, spinAxis, sub,
+  type AttitudeMode, type FrameSpec, type ManeuverSpec,
+} from '../orbit';
 import { CameraRig } from './CameraRig';
 import { formatDistance, formatDuration, formatSpeed, formatWarp } from './Format';
-import { Panel, PREDICTION_SPANS, TRAIL_SPANS, VESSEL_SPANS } from './Panel';
+import { Panel, PREDICTION_SPANS, TRAIL_SPANS, VESSEL_SPANS, type BurnEditor, type PlanRow } from './Panel';
 import { RENDER_SCALE, SceneView, type Focus, type TrajectoryEvent } from './SceneView';
 import { SYSTEM_PRESETS, type SystemPresetId } from './SystemPresets';
 
 const WARPS = [1, 10, 100, 1e3, 1e4, 1e5, 1e6, 1e7] as const;
 const MAX_VESSEL_STEPS_PER_FRAME = 20_000;
 const MAX_PREDICTION_STEPS_PER_FRAME = 4_000;
+const MAX_PLAN_STEPS_PER_FRAME = 4_000;
+/** A new burn starts this long after now or after the last executable burn. */
+const NEW_BURN_LEAD_SECONDS = 600;
+/** Warp to burn stops this long before ignition. */
+const WARP_LEAD_SECONDS = 30;
+const PLAN_MESSAGE_SECONDS = 4;
 const RETENTION_MARGIN_SECONDS = 86_400;
 const THROTTLE_RATE_PER_SECOND = 0.5;
 const MAX_APSIDES = 6;
@@ -64,6 +73,12 @@ let frame: FrameSpec = { kind: 'body-inertial', body: home };
 let focus: Focus = { kind: 'body', index: home };
 let warpIndex = 2;
 let paused = false;
+/** Simulated time warp-to-burn runs to at maximum warp, then drops to 1×. */
+let warpTarget: number | null = null;
+let selectedBurn: number | null = null;
+let seenCompleted = 0;
+/** A transient note under the burn editor, e.g. why a snap failed. */
+let planMessage: { text: string; until: number } | null = null;
 const held = new Set<string>();
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
@@ -85,8 +100,42 @@ const panel = new Panel(document.body, sim.system.bodies, { frame, focus, trailS
   attitude(mode) { setAttitude(mode); },
   reference(index) { sim.referenceChoice = index; },
   predictionHorizon(s) { sim.predictionHorizonSeconds = s; },
+  planAdd() {
+    const last = sim.plan.burns[sim.plan.burns.length - 1];
+    const startTime = Math.max(sim.time, last?.endTime ?? sim.time) + NEW_BURN_LEAD_SECONDS;
+    selectedBurn = sim.addManeuver({ startTime, referenceBody: sim.navigationReference(), prograde: 0, normal: 0, radial: 0 });
+  },
+  planSelect(i) { selectedBurn = i; planMessage = null; },
+  planRemove() {
+    const i = requireSelected();
+    sim.removeManeuver(i);
+    selectedBurn = sim.plan.count === 0 ? null : Math.min(i, sim.plan.count - 1);
+  },
+  planWarp() {
+    const next = sim.plan.burns[0];
+    if (!next) throw new Error('warp to burn without an executable burn');
+    const target = next.startTime - WARP_LEAD_SECONDS;
+    if (target > sim.time) { warpTarget = target; paused = false; }
+  },
+  planShift(seconds) { editSelected((spec) => ({ ...spec, startTime: spec.startTime + seconds })); },
+  planSnap(kind) {
+    const placement = sim.placeManeuverAtApsis(requireSelected(), kind);
+    planMessage = placement.ok ? null : { text: placement.reason, until: performance.now() + PLAN_MESSAGE_SECONDS * 1000 };
+  },
+  planReference(body) { editSelected((spec) => ({ ...spec, referenceBody: body })); },
+  planDeltaV(component, value) { editSelected((spec) => ({ ...spec, [component]: value })); },
 });
 panel.showAttitude(sim.attitudeMode);
+
+function requireSelected(): number {
+  if (selectedBurn === null || selectedBurn >= sim.plan.count) throw new Error(`no burn selected (${selectedBurn})`);
+  return selectedBurn;
+}
+
+function editSelected(change: (spec: ManeuverSpec) => ManeuverSpec): void {
+  const i = requireSelected();
+  sim.replaceManeuver(i, change(sim.plan.maneuver(i)));
+}
 
 function setAttitude(mode: AttitudeMode): void {
   sim.setAttitude(mode);
@@ -120,10 +169,10 @@ window.addEventListener('keydown', (e) => {
   held.add(e.code);
   const attitude = ATTITUDE_KEYS[e.code];
   if (attitude) setAttitude(attitude);
-  else if (e.code === 'Space') { paused = !paused; e.preventDefault(); }
-  else if (e.code === 'Period') warpIndex = Math.min(WARPS.length - 1, warpIndex + 1);
-  else if (e.code === 'Comma') warpIndex = Math.max(0, warpIndex - 1);
-  else if (e.code === 'KeyZ') sim.throttle = 1;
+  else if (e.code === 'Space') { paused = !paused; warpTarget = null; e.preventDefault(); }
+  else if (e.code === 'Period') { warpIndex = Math.min(WARPS.length - 1, warpIndex + 1); warpTarget = null; }
+  else if (e.code === 'Comma') { warpIndex = Math.max(0, warpIndex - 1); warpTarget = null; }
+  else if (e.code === 'KeyZ' && !sim.executingBurn && !sim.impact) sim.throttle = 1;
   else if (e.code === 'KeyX') sim.throttle = 0;
   else if (e.code === 'Tab') {
     e.preventDefault();
@@ -159,21 +208,32 @@ function frameLoop(nowMs: number): void {
     last = nowMs;
     const up = Number(held.has('ShiftLeft') || held.has('ShiftRight'));
     const down = Number(held.has('ControlLeft') || held.has('ControlRight'));
-    if (up !== down && !sim.impact) {
+    if (up !== down && !sim.impact && !sim.executingBurn) {
       sim.throttle = Math.min(1, Math.max(0, sim.throttle + (up - down) * THROTTLE_RATE_PER_SECOND * realDt));
     }
-    const warp = WARPS[warpIndex]!;
+    const warp = warpTarget === null ? WARPS[warpIndex]! : WARPS[WARPS.length - 1]!;
     const before = sim.time;
-    if (!paused && realDt > 0) lastReport = sim.advance(realDt * warp, MAX_VESSEL_STEPS_PER_FRAME);
+    const dt = warpTarget === null ? realDt * warp : Math.min(realDt * warp, warpTarget - sim.time);
+    if (!paused && dt > 0) lastReport = sim.advance(dt, MAX_VESSEL_STEPS_PER_FRAME);
+    if (warpTarget !== null && sim.time >= warpTarget) { warpTarget = null; warpIndex = 0; }
+    if (sim.plan.completedCount !== seenCompleted) {
+      // Flown burns leave the list; keep the selection on the same burn.
+      const flown = sim.plan.completedCount - seenCompleted;
+      seenCompleted = sim.plan.completedCount;
+      if (selectedBurn !== null) selectedBurn = selectedBurn - flown >= 0 ? selectedBurn - flown : null;
+    }
+    if (selectedBurn !== null && selectedBurn >= sim.plan.count) selectedBurn = null;
     sim.extendPrediction(MAX_PREDICTION_STEPS_PER_FRAME);
+    sim.extendPlan(MAX_PLAN_STEPS_PER_FRAME);
     achievedWarp = realDt > 0 ? (sim.time - before) / realDt : 0;
     rig.apply(camera);
     view.update(focus, camera, window.innerWidth, window.innerHeight, rig.distance * 0.12);
     renderer.render(view.scene, camera);
-    panel.setThrottle(sim.throttle, sim.throttle > 0 && sim.fuelKg > 0);
+    panel.setThrottle(sim.effectiveThrottle, sim.effectiveThrottle > 0);
     if (nowMs - lastReadout > 100) {
       lastReadout = nowMs;
       updateText(warp);
+      updatePlanPanel(nowMs);
     }
   } catch (error) {
     panic(error);
@@ -185,7 +245,7 @@ function updateText(warp: number): void {
   const lagging = !paused && !lastReport.completed;
   panel.setStatus([
     `T+ ${formatDuration(sim.time)}`,
-    `warp ${formatWarp(warp)}${paused ? '  PAUSED' : ''}${lagging ? `  LAGGING (achieved ${achievedWarp.toExponential(1)}×)` : ''}`,
+    `warp ${formatWarp(warp)}${warpTarget !== null ? ` → burn in ${formatDuration(warpTarget + WARP_LEAD_SECONDS - sim.time)}` : ''}${paused ? '  PAUSED' : ''}${lagging ? `  LAGGING (achieved ${achievedWarp.toExponential(1)}×)` : ''}`,
   ].join('\n'));
 
   const eph = sim.ephemeris;
@@ -197,7 +257,7 @@ function updateText(warp: number): void {
     '',
     `mass       ${(sim.vessel.massKg / 1000).toFixed(3)} t (fuel ${(sim.fuelKg / 1000).toFixed(3)} t)`,
     `Δv left    ${formatSpeed(sim.deltaVRemaining)}`,
-    `accel      ${(sim.engine.thrustNewtons * sim.throttle / sim.vessel.massKg).toFixed(3)} m/s² `
+    `accel      ${(sim.engine.thrustNewtons * sim.effectiveThrottle / sim.vessel.massKg).toFixed(3)} m/s² `
       + `(full ${(sim.engine.thrustNewtons / sim.vessel.massKg).toFixed(2)})`,
   ];
   const events: TrajectoryEvent[] = [];
@@ -234,17 +294,99 @@ function updateText(warp: number): void {
       const short = apsis.kind === 'periapsis' ? 'Pe' : 'Ap';
       const altitude = formatDistance(apsis.distanceMeters - R);
       lines.push(`  ${short} ${altitude.padStart(13)}  in ${formatDuration(apsis.time - sim.time)}`);
-      events.push({ kind: apsis.kind, time: apsis.time, position: apsis.position, label: `${short} ${altitude}` });
+      events.push({ kind: apsis.kind, plan: false, time: apsis.time, position: apsis.position, label: `${short} ${altitude}` });
     }
     const impact = sim.predictionImpact;
     if (impact) {
       const name = sim.system.bodies[impact.bodyIndex]!.name;
       lines.push(`  IMPACT on ${name} in ${formatDuration(impact.time - sim.time)}`);
-      events.push({ kind: 'impact', time: impact.time, position: sim.prediction.position(sim.prediction.count - 1), label: `Impact ${name}` });
+      events.push({ kind: 'impact', plan: false, time: impact.time, position: sim.prediction.position(sim.prediction.count - 1), label: `Impact ${name}` });
     }
   }
+  if (!sim.impact) lines.push(...planReadout(events));
   view.setEvents(events);
   panel.setReadout(lines.join('\n'));
+}
+
+/** Readout lines for the plan beyond its last burn; adds burn and plan apsis markers. */
+function planReadout(events: TrajectoryEvent[]): string[] {
+  const plan = sim.plan;
+  if (plan.count === 0) return [];
+  const burns = plan.burns;
+  const trajectory = plan.trajectory;
+  const total = burns.reduce((sum, b) => sum + b.deltaV, 0);
+  const last = burns[burns.length - 1];
+  const fuelAfter = (last ? last.massAfterKg : sim.vessel.massKg) - sim.engine.dryMassKg;
+  const lines = [
+    '',
+    `plan       ${burns.length}/${plan.count} burns ok, Δv ${formatSpeed(total)}`,
+    `  fuel after ${(fuelAfter / 1000).toFixed(3)} t (Δv ${formatSpeed(sim.exhaustVelocity * Math.log((fuelAfter + sim.engine.dryMassKg) / sim.engine.dryMassKg))})`,
+    `  computed to T+ ${formatDuration(plan.computedUntil)}${plan.complete ? '' : ' …'}`,
+  ];
+  const covered = (t: number) => trajectory.count > 1 && t >= trajectory.firstTime && t <= trajectory.lastTime;
+  burns.forEach((burn, i) => {
+    if (burn.startTime >= sim.time && covered(burn.startTime)) {
+      events.push({ kind: 'burn', plan: true, time: burn.startTime, position: trajectory.sample(burn.startTime).position, label: `Burn ${i + 1} · ${formatSpeed(burn.deltaV)}` });
+    }
+  });
+  if (!last) return lines;
+  const ref = plan.maneuver(burns.length - 1).referenceBody;
+  const body = sim.system.bodies[ref]!;
+  const from = Math.max(sim.time, last.endTime);
+  if (trajectory.count > 1 && trajectory.lastTime > from) {
+    lines.push(`  after burn ${burns.length}, about ${body.name}:`);
+    for (const apsis of findApsides(trajectory, sim.ephemeris, ref, from, 4)) {
+      const short = apsis.kind === 'periapsis' ? 'Pe' : 'Ap';
+      const altitude = formatDistance(apsis.distanceMeters - body.radiusMeters);
+      lines.push(`  ${short} ${altitude.padStart(13)}  in ${formatDuration(apsis.time - sim.time)}`);
+      events.push({ kind: apsis.kind, plan: true, time: apsis.time, position: apsis.position, label: `plan ${short} ${altitude}` });
+    }
+  }
+  const impact = plan.impact;
+  if (impact) {
+    const name = sim.system.bodies[impact.bodyIndex]!.name;
+    lines.push(`  IMPACT on ${name} in ${formatDuration(impact.time - sim.time)}`);
+    events.push({ kind: 'impact', plan: true, time: impact.time, position: trajectory.position(trajectory.count - 1), label: `plan impact ${name}` });
+  }
+  return lines;
+}
+
+function updatePlanPanel(nowMs: number): void {
+  const plan = sim.plan;
+  const executing = sim.executingBurn;
+  const rows: PlanRow[] = [];
+  for (let i = 0; i < plan.count; i += 1) {
+    const spec = plan.maneuver(i);
+    const status = plan.status(i);
+    const dv = Math.hypot(spec.prograde, spec.normal, spec.radial);
+    const when = executing && i === 0 ? 'BURNING   ' : `in ${formatDuration(spec.startTime - sim.time)}`;
+    rows.push({ text: `#${i + 1} ${when.padEnd(13)} ${formatSpeed(dv).padStart(11)}${status.ok ? '' : '  ✕'}`, ok: status.ok });
+  }
+  let editor: BurnEditor | null = null;
+  if (selectedBurn !== null) {
+    const i = selectedBurn;
+    const spec = plan.maneuver(i);
+    const status = plan.status(i);
+    const summary = [
+      `start T+ ${formatDuration(spec.startTime)} (in ${formatDuration(spec.startTime - sim.time)})`,
+    ];
+    if (status.ok) {
+      const burn = status.burn;
+      summary.push(
+        `Δv ${formatSpeed(burn.deltaV)}, ${formatDuration(burn.endTime - burn.startTime)} at full thrust`,
+        `fuel ${((burn.massBeforeKg - sim.engine.dryMassKg) / 1000).toFixed(3)} → ${((burn.massAfterKg - sim.engine.dryMassKg) / 1000).toFixed(3)} t`,
+      );
+    } else {
+      summary.push(`✕ ${status.reason}`);
+    }
+    if (planMessage && nowMs < planMessage.until) summary.push(`✕ ${planMessage.text}`);
+    editor = {
+      index: i, referenceBody: spec.referenceBody, prograde: spec.prograde, normal: spec.normal, radial: spec.radial,
+      summary: summary.join('\n'), ok: status.ok, editable: !(executing && i === 0),
+    };
+  }
+  const next = plan.burns[0];
+  panel.showPlan(rows, selectedBurn, editor, next !== undefined && next.startTime - WARP_LEAD_SECONDS > sim.time);
 }
 
 requestAnimationFrame(frameLoop);
