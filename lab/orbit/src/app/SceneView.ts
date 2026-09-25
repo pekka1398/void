@@ -13,8 +13,8 @@ const LABEL_HEIGHT = 13;
 const VESSEL_COLOR = '#7dffb0';
 const HISTORY_COLOR = '#ff5a5a';
 const PREDICTION_COLOR = '#4fc8ff';
-/** Opacity at the far end of a fading vessel path; the present end is fully opaque. */
-const FADE_FLOOR = 0.1;
+/** Lightness at the far end of a fading vessel path, as a fraction of the base colour. */
+const FADE_FLOOR = 0.12;
 
 export type Focus = { kind: 'body'; index: number } | { kind: 'vessel' };
 
@@ -139,14 +139,14 @@ export class SceneView {
     if (this.vesselCache) {
       const span = this.vesselSpan;
       writeLine(this.vesselTrail, this.vesselCache, origin, null, vesselFrame, {
-        rgb: HISTORY_RGB, headTime: null, tailTime: now, alpha: (t) => fade((now - t) / span),
+        rgb: HISTORY_RGB, headTime: null, tailTime: now, lightness: (t) => fade((now - t) / span), presentFirst: false,
       });
     }
     this.predictionLine.visible = this.predictionCache !== null && predictionEnd !== null;
     if (this.predictionCache && predictionEnd) {
       const span = this.sim.predictionHorizonSeconds;
       writeLine(this.predictionLine, this.predictionCache, origin, vesselFrame, predictionEnd, {
-        rgb: PREDICTION_RGB, headTime: now, tailTime: this.sim.prediction.lastTime, alpha: (t) => fade((t - now) / span),
+        rgb: PREDICTION_RGB, headTime: now, tailTime: this.sim.prediction.lastTime, lightness: (t) => fade((t - now) / span), presentFirst: true,
       });
     }
     this.updateThrustArrow(frameNow, sub(vesselFrame, origin), arrowLength);
@@ -329,7 +329,7 @@ function rgbOf(color: string): [number, number, number] {
   return [c.r, c.g, c.b];
 }
 
-/** Opacity for a path vertex at fraction 0 (now) .. 1 (far end of its span). */
+/** Lightness for a path vertex at fraction 0 (now) .. 1 (far end of its span). */
 function fade(fraction: number): number {
   const f = Math.min(1, Math.max(0, fraction));
   return FADE_FLOOR + (1 - FADE_FLOOR) * (1 - f) ** 1.5;
@@ -339,17 +339,37 @@ interface Fade {
   rgb: readonly [number, number, number];
   headTime: number | null;
   tailTime: number | null;
-  alpha: (t: number) => number;
+  lightness: (t: number) => number;
+  /** The cache runs from the present outward; reverse it so the present is drawn last. */
+  presentFirst: boolean;
 }
 
-/** A line coloured per vertex with RGBA, for paths that fade with time. */
+/**
+ * An opaque line coloured per vertex, darkening toward black with time. It
+ * depth-tests against bodies but writes no depth, so among its own
+ * overlapping laps the segment drawn last wins; vertices are ordered from
+ * the far end to the present so the brightest part stays on top. A high
+ * renderOrder draws it after the bodies, which keep occluding it.
+ */
 function createFadingLine(): THREE.Line {
   const line = createLine('#ffffff', 1);
-  const colors = new THREE.BufferAttribute(new Float32Array(1024 * 4), 4);
+  const colors = new THREE.BufferAttribute(new Float32Array(1024 * 3), 3);
   colors.setUsage(THREE.DynamicDrawUsage);
   line.geometry.setAttribute('color', colors);
-  line.material = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false });
+  line.material = new THREE.LineBasicMaterial({ vertexColors: true, depthWrite: false });
+  line.renderOrder = 10;
   return line;
+}
+
+/** Reverse the first n vertices of an attribute array in place. */
+function reverseVertices(array: Float32Array, n: number, itemSize: number): void {
+  for (let i = 0, j = n - 1; i < j; i += 1, j -= 1) {
+    for (let c = 0; c < itemSize; c += 1) {
+      const t = array[i * itemSize + c]!;
+      array[i * itemSize + c] = array[j * itemSize + c]!;
+      array[j * itemSize + c] = t;
+    }
+  }
 }
 
 function createLine(color: string, opacity: number): THREE.Line {
@@ -378,9 +398,13 @@ function writeLine(line: THREE.Line, cache: PathCache, origin: Vec3, head: Vec3 
   const written = cache.writeRelative(positions.array as Float32Array, origin, head, tail, RENDER_SCALE);
   positions.needsUpdate = true;
   if (fading) {
-    const colors = ensureAttribute(line, 'color', 4, needed);
-    const coloured = cache.writeColors(colors.array as Float32Array, fading.headTime, fading.tailTime, fading.rgb, fading.alpha);
+    const colors = ensureAttribute(line, 'color', 3, needed);
+    const coloured = cache.writeColors(colors.array as Float32Array, fading.headTime, fading.tailTime, fading.rgb, fading.lightness);
     if (coloured !== written) throw new Error(`writeLine: ${written} positions but ${coloured} colours`);
+    if (fading.presentFirst) {
+      reverseVertices(positions.array as Float32Array, written, 3);
+      reverseVertices(colors.array as Float32Array, written, 3);
+    }
     colors.needsUpdate = true;
   }
   line.geometry.setDrawRange(0, written);

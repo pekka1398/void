@@ -57,13 +57,14 @@ export class PathCache {
   }
 
   /**
-   * Write RGBA per vertex in the same order as writeRelative, with alpha a
-   * function of each vertex's time. Returns the number of vertices written.
+   * Write RGB per vertex in the same order as writeRelative: the base colour
+   * scaled toward black by lightness(t) in [0, 1]. Returns the vertex count.
    */
-  writeColors(out: Float32Array, headTime: number | null, tailTime: number | null, rgb: readonly [number, number, number], alpha: (t: number) => number): number {
+  writeColors(out: Float32Array, headTime: number | null, tailTime: number | null, rgb: readonly [number, number, number], lightness: (t: number) => number): number {
     let n = 0;
     const put = (t: number) => {
-      out[n * 4] = rgb[0]; out[n * 4 + 1] = rgb[1]; out[n * 4 + 2] = rgb[2]; out[n * 4 + 3] = alpha(t);
+      const k = lightness(t);
+      out[n * 3] = rgb[0] * k; out[n * 3 + 1] = rgb[1] * k; out[n * 3 + 2] = rgb[2] * k;
       n += 1;
     };
     if (headTime !== null) put(headTime);
