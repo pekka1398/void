@@ -248,12 +248,14 @@ export class Lander {
 
   private contactStep(control: LanderControl): void {
     const { world, body } = this.contact!;
+    const dt = this.options.contact.stepSeconds;
     if (control.turn) {
       const q = body.rotation();
       const torque = rotate(q, control.turn);
-      body.addTorque(scaleVec(torque, 6000), true);
+      // A held key supplies 6000 N·m for this step only. addTorque persists
+      // until reset in Rapier, so use its per-step angular impulse instead.
+      if (torque.x !== 0 || torque.y !== 0 || torque.z !== 0) body.applyTorqueImpulse(scaleVec(torque, 6000 * dt), true);
     }
-    const dt = this.options.contact.stepSeconds;
     const flow = (control.throttle * this.spec.thrustNewtons) / this.exhaustVelocity;
     // A step that would empty the tanks burns only what is left.
     const burned = Math.min(flow * dt, this.fuelKg);

@@ -437,6 +437,20 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
   check('manual thrust direction', lateral > 40 && tilted.mode === 'flight',
     `five-second tilted burn displaces the craft ${lateral.toFixed(2)} m sideways in the orbit propagator`);
 
+  // One frame of input must be one angular impulse, not a force that keeps
+  // accumulating after the key is released.
+  const hoverState = { position: { x: env.terrain.radiusMeters + env.terrain.maxHeightMeters + 100, y: 0, z: 0 },
+    velocity: { x: 0, y: 0, z: 0 } };
+  const pulse = Lander.flying(RAPIER, env.ephemeris, 0, env.terrain, LANDER_SPEC, LANDER_OPTIONS, 0, hoverState);
+  const qStart = pulse.orientation();
+  pulse.advance(1 / 60, { ...COAST, turn: { x: 0, y: 0, z: 1 } });
+  pulse.advance(2, COAST);
+  const qEnd = pulse.orientation();
+  const dot = Math.abs(qStart.x * qEnd.x + qStart.y * qEnd.y + qStart.z * qEnd.z + qStart.w * qEnd.w);
+  const angle = 2 * Math.acos(Math.min(1, dot));
+  check('one-frame steering pulse', pulse.mode === 'contact' && angle > 0.001 && angle < 0.2,
+    `one frame of yaw then two seconds released rotates ${((angle * 180) / Math.PI).toFixed(2)}° total`);
+
   const contactUp = Lander.landed(RAPIER, env.ephemeris, 0, env.terrain, LANDER_SPEC, LANDER_OPTIONS, 0, LAUNCH_SITE);
   const contactTilt = Lander.landed(RAPIER, env.ephemeris, 0, env.terrain, LANDER_SPEC, LANDER_OPTIONS, 0, LAUNCH_SITE);
   contactUp.advance(0.5, COAST);
