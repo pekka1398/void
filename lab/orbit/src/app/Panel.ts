@@ -1,6 +1,6 @@
 import type { AttitudeMode, CelestialBody, FrameSpec } from '../orbit';
 import { SECONDS_PER_DAY } from '../orbit';
-import { decimalFormat, DigitField, durationFormat } from './DigitField';
+import { DigitField, durationFormat, speedFormat } from './DigitField';
 import type { Focus } from './SceneView';
 import type { SystemPresetId } from './SystemPresets';
 
@@ -151,7 +151,7 @@ export class Panel {
         <label>Reference <select data-k="burn-ref">${bodyOptions}</select></label>
         <label>Start T+ <span data-k="burn-start"></span></label>
         <div class="snap"><button data-snap="periapsis">@ next Pe</button><button data-snap="apoapsis">@ next Ap</button></div>
-        ${DV_COMPONENTS.map(([c, label]) => `<label>${label} <span><span data-dv="${c}"></span> m/s</span></label>`).join('')}
+        ${DV_COMPONENTS.map(([c, label]) => `<label>${label} <span><span data-dv="${c}"></span> km/s</span></label>`).join('')}
         <pre class="plan-summary"></pre>
       </div>
       <div class="help">
@@ -218,7 +218,7 @@ export class Panel {
       button.addEventListener('click', () => handlers.planSnap(button.dataset.snap as 'periapsis' | 'apoapsis'));
     }
     for (const [component] of DV_COMPONENTS) {
-      const field = new DigitField(decimalFormat(5, 2), (v) => handlers.planDeltaV(component, v));
+      const field = new DigitField(speedFormat(99_999.99), (v) => handlers.planDeltaV(component, v));
       this.planEditor.querySelector(`[data-dv="${component}"]`)!.append(field.element);
       this.dvFields.set(component, field);
     }

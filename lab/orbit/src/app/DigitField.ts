@@ -148,29 +148,39 @@ export function durationFormat(min: number, max: number): DigitFormat {
   };
 }
 
-/** Signed fixed-point number, e.g. +03120.00; every digit scrollable. */
-export function decimalFormat(integerDigits: number, fractionDigits: number): DigitFormat {
-  const limit = 10 ** integerDigits - 10 ** -fractionDigits;
+/**
+ * Speed shown as km/s with two scroll targets, e.g. +3.120: the wheel over
+ * the whole kilometres steps 1 km/s, over the metres 1 m/s. A typed fraction
+ * of a metre per second follows as further km/s decimals, not scrollable. Typed text is m/s
+ * unless it ends in km/s: "3120", "3120.45 m/s", "3.12 km/s".
+ */
+export function speedFormat(maxMetersPerSecond: number): DigitFormat {
   return {
-    min: -limit, max: limit,
-    normalize: (value) => Number(value.toFixed(fractionDigits)),
+    min: -maxMetersPerSecond, max: maxMetersPerSecond,
+    normalize: (value) => Number(value.toFixed(2)),
     render(value) {
-      const text = Math.abs(value).toFixed(fractionDigits).padStart(integerDigits + 1 + fractionDigits, '0');
-      const out: { text: string; place: number | null }[] = [{ text: value < 0 ? '−' : '+', place: null }];
-      let place = 10 ** (integerDigits - 1);
-      for (const ch of text) {
-        if (ch === '.') { out.push({ text: '.', place: null }); continue; }
-        out.push({ text: ch, place });
-        place /= 10;
-      }
-      return out;
+      const v = Math.abs(Number(value.toFixed(2)));
+      const km = Math.floor(v / 1000);
+      const meters = Number((v - km * 1000).toFixed(2));
+      const whole = Math.floor(meters);
+      // Hundredths of m/s continue the km/s decimals: 3.120 then 45 reads 3.12045 km/s.
+      const fraction = (meters - whole).toFixed(2).slice(2).replace(/0$/, '').replace(/^0$/, '');
+      const parts: { text: string; place: number | null }[] = [
+        { text: value < 0 ? '−' : '+', place: null },
+        { text: String(km), place: 1000 }, { text: '.', place: null },
+        { text: String(whole).padStart(3, '0'), place: 1 },
+      ];
+      if (fraction !== '') parts.push({ text: fraction, place: null });
+      return parts;
     },
     parse(text) {
-      const value = Number(text.replace('−', '-'));
-      return text !== '' && Number.isFinite(value) ? Number(value.toFixed(fractionDigits)) : null;
+      const match = /^([+\-−]?\d+(?:\.\d+)?)\s*(km\/s|m\/s)?$/i.exec(text);
+      if (!match) return null;
+      const number = Number(match[1]!.replace('−', '-'));
+      return match[2]?.toLowerCase() === 'km/s' ? number * 1000 : number;
     },
     editText(value) {
-      return String(Number(value.toFixed(fractionDigits)));
+      return `${Number(value.toFixed(2))} m/s`;
     },
   };
 }
