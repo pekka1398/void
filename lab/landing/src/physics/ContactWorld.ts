@@ -113,6 +113,7 @@ export class ContactWorld {
       // Stored velocity is the half-step velocity v - a dt/2.
       .setLinvel(state.velocity.x - (a.x * dt) / 2, state.velocity.y - (a.y * dt) / 2, state.velocity.z - (a.z * dt) / 2)
       .setRotation(rotation)
+      .setAngularDamping(spec.shape.kind === 'box' ? 0.8 : 0)
       .setCcdEnabled(true));
     if (spec.lockRotations) body.lockRotations(true, false);
     const shape = spec.shape;

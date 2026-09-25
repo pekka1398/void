@@ -312,7 +312,7 @@ const LANDER_SPEC: LanderSpec = {
 };
 const LANDER_OPTIONS: LanderOptions = {
   contact: CONTACT_OPTIONS, tolerances: FRAME_TOLERANCES,
-  bandEnterMeters: 200, bandExitMeters: 400, landedSpeed: 0.05, landedSeconds: 1,
+  bandEnterMeters: 200, bandExitMeters: 400,
 };
 const LAUNCH_SITE = { x: 0.8, y: 0.55, z: 0.25 };
 const UP: LanderControl = { throttle: 1, up: 1, prograde: 0 };
@@ -334,30 +334,40 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
   lander.advance(20, UP);
   let worst = 0, worstAt = 0, highest = 0, compared = 0;
   const massError = Math.abs(lander.massKg - run.state.massKg);
-  while (lander.mode !== 'landed' && lander.time < 600) {
+  while (lander.time < 600) {
+    if (lander.time > 60 && lander.mode === 'contact' && lander.clearance() < 3) break;
     lander.advance(1, COAST);
-    propagator.advance(run, lander.time, 1e7, null, null);
+    if (!run.impact) propagator.advance(run, lander.time, 1e7, null, null);
     highest = Math.max(highest, lander.clearance());
     // Compare while the lander is clear of the ground (the reference has none).
-    if (lander.clearance() > 20) {
+    if (lander.clearance() > 20 && !run.impact) {
       const reference = env.frame.toBodyFixed(lander.time, { position: run.state.position, velocity: run.state.velocity });
       const e = distance(lander.bodyFixedState().position, reference.position);
       if (e > worst) { worst = e; worstAt = lander.time; }
       compared += 1;
     }
   }
-  const sequence = ['landed', ...lander.modeChanges.map((c) => c.to)].join(' -> ');
-  check('hand-off consistency', worst < 0.1 && massError < 1e-6 && sequence === 'landed -> contact -> flight -> contact -> landed',
+  const sequence = ['contact', ...lander.modeChanges.slice(1).map((c) => c.to)].join(' -> ');
+  check('hand-off consistency', worst < 0.1 && massError < 1e-6 && sequence === 'contact -> flight -> contact',
     `${sequence}; top ${(highest / 1e3).toFixed(2)} km above the terrain; over ${compared} samples the lander stays within ${fmt(worst)} m of the orbit lab's integration (worst at T+${worstAt.toFixed(0)} s); fuel differs by ${fmt(massError)} kg`);
 
-  // Landed: pinned in the planet's frame through a day of warp.
-  const pinned = lander.bodyFixedState().position;
-  const inertialBefore = lander.inertialState().position;
-  lander.advance(86_400, COAST);
-  const moved = distance(lander.bodyFixedState().position, pinned);
-  const swept = distance(lander.inertialState().position, inertialBefore);
-  check('landed under warp', lander.mode === 'landed' && moved === 0 && swept > 1000,
-    `a day in one step: body-fixed position unchanged, carried ${(swept / 1e3).toFixed(1)} km by the planet's spin in the inertial frame`);
+  // Touchdown remains a live rigid body, so collision can turn and move it.
+  const atTouchdown = lander.bodyFixedState().position;
+  lander.advance(10, COAST);
+  const afterContact = lander.bodyFixedState().position;
+  check('live ground contact', lander.mode === 'contact' && distance(atTouchdown, afterContact) > 0,
+    `ten seconds after touchdown the unpinned craft moved ${fmt(distance(atTouchdown, afterContact))} m`);
+}
+
+{
+  const env = plainPebble();
+  const lander = Lander.landed(RAPIER, env.ephemeris, 0, env.terrain, LANDER_SPEC, LANDER_OPTIONS, 0, LAUNCH_SITE);
+  const q0 = lander.orientation();
+  lander.advance(15, COAST);
+  const q1 = lander.orientation();
+  const alignment = Math.abs(q0.x * q1.x + q0.y * q1.y + q0.z * q1.z + q0.w * q1.w);
+  check('unlocked ground rotation', lander.mode === 'contact' && alignment < 0.999,
+    `the live craft tips on the slope: initial/final quaternion alignment ${alignment.toFixed(4)}`);
 }
 
 {
@@ -368,7 +378,9 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
   const g = 1.6;
   lander.advance(20, UP);
   let peak = 0, touchdownSpeed = 0, lastSpeed = 0;
-  while (lander.mode !== 'landed' && lander.time < 1200) {
+  while (lander.time < 1200) {
+    if (lander.time > 60 && lander.mode === 'contact' && lander.clearance() < LANDER_SPEC.halfExtents.y + 0.3
+      && Math.hypot(...Object.values(lander.bodyFixedState().velocity)) < 0.5) break;
     const s = lander.bodyFixedState();
     const r = Math.hypot(s.position.x, s.position.y, s.position.z);
     const vUp = (s.velocity.x * s.position.x + s.velocity.y * s.position.y + s.velocity.z * s.position.z) / r;
@@ -391,8 +403,8 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
     lander.advance(0.1, control);
   }
   const drift = distance(lander.bodyFixedState().position, site);
-  const sequence = ['landed', ...lander.modeChanges.map((c) => c.to)].join(' -> ');
-  check('hop and land', lander.mode === 'landed' && peak > 9000 && touchdownSpeed < 3 && lander.fuelKg > 0,
+  const sequence = ['contact', ...lander.modeChanges.slice(1).map((c) => c.to)].join(' -> ');
+  check('hop and land', lander.mode === 'contact' && peak > 9000 && touchdownSpeed < 3 && lander.fuelKg > 0,
     `${sequence}; peak ${(peak / 1e3).toFixed(1)} km, touchdown at ${touchdownSpeed.toFixed(2)} m/s, landed ${(drift / 1e3).toFixed(2)} km from the launch site after ${lander.time.toFixed(0)} s, ${lander.fuelKg.toFixed(0)} kg fuel left (last speed ${lastSpeed.toFixed(2)} m/s)`);
 }
 
@@ -427,11 +439,13 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
 
   const contactUp = Lander.landed(RAPIER, env.ephemeris, 0, env.terrain, LANDER_SPEC, LANDER_OPTIONS, 0, LAUNCH_SITE);
   const contactTilt = Lander.landed(RAPIER, env.ephemeris, 0, env.terrain, LANDER_SPEC, LANDER_OPTIONS, 0, LAUNCH_SITE);
+  contactUp.advance(0.5, COAST);
+  contactTilt.advance(0.5, { ...COAST, turn: { x: 1, y: 0, z: 0 } });
   contactUp.advance(2, { throttle: 1, up: 1, prograde: 0, direction: { x: 0.8, y: 0.55, z: 0.25 } });
-  contactTilt.advance(2, { throttle: 1, up: 1, prograde: 0, direction: { x: 0.48, y: 0.33, z: 0.812 } });
+  contactTilt.advance(2, { throttle: 1, up: 1, prograde: 0, direction: { x: 0.8, y: 0.55, z: 0.25 } });
   const contactSideways = distance(contactUp.bodyFixedState().position, contactTilt.bodyFixedState().position);
-  check('contact thrust steering', contactSideways > 5 && contactTilt.mode === 'contact',
-    `two-second tilted burn separates from an upright burn by ${contactSideways.toFixed(2)} m in Rapier`);
+  check('contact thrust steering', contactSideways > 0.5 && contactTilt.mode === 'contact',
+    `steering torque tilts the live body; a two-second burn separates it from upright by ${contactSideways.toFixed(2)} m in Rapier`);
 }
 
 if (failures.length > 0) {

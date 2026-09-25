@@ -29,9 +29,11 @@ export interface LanderControl {
   /** Optional body-fixed thrust axis and collider orientation for manual steering. */
   direction?: Vec3;
   rotation?: Quaternion;
+  /** Angular steering about the craft's local pitch, roll and yaw axes. */
+  turn?: Vec3;
 }
 
-export type LanderMode = 'flight' | 'contact' | 'landed';
+export type LanderMode = 'flight' | 'contact';
 
 export interface LanderOptions {
   contact: ContactWorldOptions;
@@ -40,10 +42,6 @@ export interface LanderOptions {
   bandEnterMeters: number;
   /** ...and hands back to free flight this far above it (> enter). */
   bandExitMeters: number;
-  /** At rest with the engine off: ground speed below this... */
-  landedSpeed: number;
-  /** ...for this long pins the lander to the ground. */
-  landedSeconds: number;
 }
 
 export interface ModeChange { time: number; from: LanderMode; to: LanderMode }
@@ -52,13 +50,12 @@ export interface ModeChange { time: number; from: LanderMode; to: LanderMode }
 const BAND_SNAP_METERS = 1;
 
 /**
- * One vessel near a rotating planet, in one of three modes:
+ * One vessel near a rotating planet, in one of two modes:
  * - flight: the orbit lab's integrator, inertial frame, while above the
  *   terrain band (highest terrain + bandEnter). Chunks are bounded so the
  *   band cannot be crossed unseen between checks.
  * - contact: a Rapier box in the planet's rotating frame, inside the band.
- * - landed: at rest on the ground, pinned in body-fixed coordinates; any
- *   time step is allowed.
+ * Contact remains a live rigid body after touchdown, including at rest.
  * States cross between modes unchanged (converted between frames).
  */
 export class Lander {
@@ -74,8 +71,7 @@ export class Lander {
   private readonly propagator: VesselPropagator;
   private run: PropagationRun | null = null;
   private contact: { world: ContactWorld; body: RAPIER_NS.RigidBody } | null = null;
-  private pinned: Vec3 | null = null;
-  private restingFor = 0;
+  private flightRotation: Quaternion = { x: 0, y: 0, z: 0, w: 1 };
   /**
    * Thrust acceleration over the last contact step (or the half step before
    * entering contact), for the leapfrog average; see ExtraAcceleration.
@@ -93,7 +89,7 @@ export class Lander {
     this.propagator = new VesselPropagator(ephemeris, options.tolerances);
     this.time = time;
     this.massKg = spec.dryMassKg + spec.fuelMassKg;
-    this.mode = 'landed';
+    this.mode = 'flight';
   }
 
   /** A lander resting on the ground below a body-fixed direction. */
@@ -112,7 +108,8 @@ export class Lander {
       ground = Math.max(ground, lander.groundHeightUnder({ x: p.x / pl, y: p.y / pl, z: p.z / pl }));
     }
     const r = terrain.radiusMeters + ground + spec.halfExtents.y + 0.01;
-    lander.pinned = { x: d.x * r, y: d.y * r, z: d.z * r };
+    lander.enterContact({ position: { x: d.x * r, y: d.y * r, z: d.z * r }, velocity: { x: 0, y: 0, z: 0 } },
+      { x: 0, y: 0, z: 0 }, uprightAt(d));
     return lander;
   }
 
@@ -133,9 +130,14 @@ export class Lander {
     return this.massKg - this.spec.dryMassKg;
   }
 
+  /** Actual body-fixed orientation, including collision-induced tumbling. */
+  orientation(): Quaternion {
+    if (this.mode === 'contact') return this.contact!.body.rotation();
+    return this.flightRotation;
+  }
+
   /** Body-fixed state now. */
   bodyFixedState(): FrameState {
-    if (this.mode === 'landed') return { position: { ...this.pinned! }, velocity: { x: 0, y: 0, z: 0 } };
     if (this.mode === 'contact') return this.contact!.world.state(this.contact!.body, this.previousPush);
     const s = this.run!.state;
     return this.frame.toBodyFixed(this.time, { position: s.position, velocity: s.velocity });
@@ -168,11 +170,6 @@ export class Lander {
     const step = this.options.contact.stepSeconds;
     this.frame.ephemeris.extendTo(target);
     for (;;) {
-      if (this.mode === 'landed') {
-        if (control.throttle > 0 && this.fuelKg > 0) { this.enterContact(this.bodyFixedState(), { x: 0, y: 0, z: 0 }, control.rotation); continue; }
-        this.time = target;
-        return;
-      }
       if (this.mode === 'contact') {
         if (this.time + step > target + 1e-9) return;
         this.contactStep(control);
@@ -214,6 +211,7 @@ export class Lander {
 
   /** One bounded piece of free flight toward target. */
   private flightChunk(target: number, control: LanderControl): void {
+    if (control.rotation) this.flightRotation = { ...control.rotation };
     const run = this.run!;
     const planet = this.frame.ephemeris.bodyState(this.frame.body.index, this.time);
     const s = run.state;
@@ -250,7 +248,11 @@ export class Lander {
 
   private contactStep(control: LanderControl): void {
     const { world, body } = this.contact!;
-    if (control.rotation) body.setRotation(control.rotation, true);
+    if (control.turn) {
+      const q = body.rotation();
+      const torque = rotate(q, control.turn);
+      body.addTorque(scaleVec(torque, 6000), true);
+    }
     const dt = this.options.contact.stepSeconds;
     const flow = (control.throttle * this.spec.thrustNewtons) / this.exhaustVelocity;
     // A step that would empty the tanks burns only what is left.
@@ -260,7 +262,8 @@ export class Lander {
     const meanMass = this.massKg - burned / 2;
     let push: Vec3 = { x: 0, y: 0, z: 0 };
     world.step((_, state) => {
-      push = thrust > 0 ? scaleVec(surfaceDirection(state, control), thrust / meanMass) : { x: 0, y: 0, z: 0 };
+      const direction = control.direction ? rotate(body.rotation(), { x: 0, y: 1, z: 0 }) : surfaceDirection(state, control);
+      push = thrust > 0 ? scaleVec(direction, thrust / meanMass) : { x: 0, y: 0, z: 0 };
       const before = this.previousPush;
       return { x: (before.x + push.x) / 2, y: (before.y + push.y) / 2, z: (before.z + push.z) / 2 };
     });
@@ -271,43 +274,34 @@ export class Lander {
     const state = world.state(body, push);
     const r = Math.hypot(state.position.x, state.position.y, state.position.z);
     if (r > this.bandRadius(this.options.bandExitMeters)) { this.enterFlight(state); return; }
-    const resting = thrust === 0 && Math.hypot(state.velocity.x, state.velocity.y, state.velocity.z) < this.options.landedSpeed;
-    this.restingFor = resting ? this.restingFor + dt : 0;
-    if (this.restingFor >= this.options.landedSeconds) this.enterLanded(state.position);
   }
 
   /** pushBefore: thrust acceleration over the half step before now (zero from rest). */
   private enterContact(state: FrameState, pushBefore: Vec3, rotation?: Quaternion): void {
+    const initialRotation = rotation ?? this.orientation();
     this.leave();
     this.previousPush = pushBefore;
     const world = new ContactWorld(this.rapier, this.frame, this.terrain, this.options.contact, this.time, state.position);
     const { halfExtents, friction } = this.spec;
     const body = world.addBody(
-      { shape: { kind: 'box', halfExtents }, massKg: this.massKg, friction, restitution: 0, lockRotations: true },
-      state, rotation ?? uprightAt(state.position), pushBefore,
+      { shape: { kind: 'box', halfExtents }, massKg: this.massKg, friction, restitution: 0, lockRotations: false },
+      state, initialRotation, pushBefore,
     );
     this.contact = { world, body };
-    this.restingFor = 0;
     this.switchTo('contact');
   }
 
   private enterFlight(state: FrameState): void {
+    if (this.contact) this.flightRotation = this.contact.body.rotation();
     this.leave();
     const inertial = this.frame.toInertial(this.time, state);
     this.run = new PropagationRun({ time: this.time, position: inertial.position, velocity: inertial.velocity, massKg: this.massKg });
     this.switchTo('flight');
   }
 
-  private enterLanded(position: Vec3): void {
-    this.leave();
-    this.pinned = { ...position };
-    this.switchTo('landed');
-  }
-
   private leave(): void {
     if (this.contact) { this.contact.world.free(); this.contact = null; }
     this.run = null;
-    this.pinned = null;
   }
 
   private switchTo(mode: LanderMode): void {

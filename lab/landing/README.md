@@ -58,20 +58,20 @@ Not modelled: the frame's fictitious torques on spinning bodies (of order ω, 6e
 |---|---|---|
 | P1 | Lab setup, terrain contract, collision tiles | done |
 | P2 | Rapier contacts in the rotating frame; drift and rest checks | done |
-| P3 | Hand-off between inertial free flight and contacts; landed state; warp | done |
+| P3 | Hand-off between inertial free flight and live ground contacts | done |
 | P4 | Page: rendering, controls, camera frames, terrain-aware prediction | done |
 
 ## Flight and landing (`src/vessel/Lander.ts`)
 
-- A lander has three modes: inertial free flight with the orbit lab's propagator, rotating-frame Rapier contacts near the terrain, and a landed position pinned to the surface during time warp. The contact band has separate entry and exit heights to avoid repeated switching.
+- A lander has two modes: inertial free flight with the orbit lab's propagator and rotating-frame Rapier contacts near the terrain. Contact stays live after touchdown, so the craft can tip, bounce or slide. The contact band has separate entry and exit heights to avoid repeated switching.
 - Thrust uses the same surface-relative direction law in both physics engines. Contact integration accounts for fuel lost during each step and carries the half-step thrust across mode changes.
-- The P3 check launches from a slope, crosses from contact to free flight and back, then settles on the ground. While clear of terrain, its trajectory stays within 5 mm of an independent run of the orbit lab's integrator. A separate controlled landing reaches 13.6 km and touches down below 1 m/s. A landed craft stays fixed on the surface through one day of time warp.
+- The P3 check launches from a slope, crosses from contact to free flight and back, then reaches the ground. While clear of terrain, its trajectory is compared with an independent run of the orbit lab's integrator. A separate controlled landing reaches about 13.6 km and touches down below 1 m/s. Once on the ground it remains a Rapier rigid body; high time warp is unavailable during contact.
 
 ## Interactive page
 
 Open the Vite page and click **Launch**, or set the throttle and press **Space**. **Cut engine** starts a coast. The camera can follow either the rotating surface or inertial axes. The craft stays at the render origin for precision, while the terrain and planet move around it. Nearby visual tiles use the same mesh builder as contact tiles. A coarse planet mesh fills the distance behind them.
 
-Keyboard controls: **Space** toggles ignition, **Shift/Ctrl** raise/lower throttle, **W/S** pitch, **A/D** yaw, and **Q/E** roll. Steering rotates the rendered craft and its contact box. The thrust axis follows that orientation in both contact and inertial flight. Pitch and yaw change the burn trajectory; roll rotates about the thrust axis. Steering starts after lift-off. The old yellow exhaust cone is removed, and the gold coast-impact marker is hidden while the engine fires.
+Keyboard controls: **Space** toggles ignition, **Shift/Ctrl** raise/lower throttle, **W/S** pitch, **A/D** yaw, and **Q/E** roll. In contact, steering applies torque to the Rapier body and the rendered craft follows its actual rotation. In free flight, steering changes its idealized attitude directly. The thrust axis follows that orientation in both modes. Pitch and yaw change the burn trajectory; roll rotates about the thrust axis. The old yellow exhaust cone is removed, and the gold coast-impact marker is hidden while the engine fires.
 
 **Show collision meshes** overlays the unique triangle edges of loaded terrain colliders and the craft's Rapier box in white. The box reaches the bottoms of the visible landing legs, so those legs no longer extend below the contact shape.
 
