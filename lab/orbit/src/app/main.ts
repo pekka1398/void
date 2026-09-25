@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {
-  cross, DEGREES, dot, findApsides, length, osculatingOrbit, Simulation, spinAxis, sub,
+  cross, DEGREES, distance, dot, findApsides, length, osculatingOrbit, Simulation, spinAxis, sub,
   type AttitudeMode, type FrameSpec, type ManeuverSpec, type StartPlane,
 } from '../orbit';
 import { CameraRig } from './CameraRig';
@@ -80,6 +80,8 @@ let paused = false;
 /** Simulated time warp-to-burn runs to at maximum warp, then drops to 1×. */
 let warpTarget: number | null = null;
 let selectedBurn: number | null = null;
+/** Body whose path is drawn over the plan's interval, with its position at the plan's end. */
+let planTarget: number | null = sim.bodyIndex(HOME_MOON[systemId]);
 let seenCompleted = 0;
 /** A transient note under the burn editor, e.g. why a snap failed. */
 let planMessage: { text: string; until: number } | null = null;
@@ -94,7 +96,9 @@ const camera = new THREE.PerspectiveCamera(50, 1, 1, 2);
 const rig = new CameraRig(renderer.domElement, 60_000, 5e10);
 const view = new SceneView(sim, overlay, frame, trailSpan, vesselSpan, (picked) => setFocus(picked));
 
+view.setTarget(planTarget);
 const panel = new Panel(document.body, sim.system.bodies, { frame, focus, trailSpan, vesselSpan, predictionSpan, planCoast, system: systemId,
+  planTarget: sim.bodyIndex(HOME_MOON[systemId]),
   startPlanes: startPlaneChoices(), startPlane: startPlaneValue(sim.vesselStart.plane) }, {
   frame(spec) { frame = spec; view.setFrame(spec); },
   focus(next) { setFocus(next); },
@@ -129,6 +133,7 @@ const panel = new Panel(document.body, sim.system.bodies, { frame, focus, trailS
   },
   planReference(body) { editSelected((spec) => ({ ...spec, referenceBody: body })); },
   planCoast(s) { sim.plan.coastSeconds = s; },
+  planTarget(index) { planTarget = index; view.setTarget(index); },
   startPlane(value) {
     sim.vesselStart = { ...sim.vesselStart, plane: parseStartPlane(value) };
     sim.resetVessel();
@@ -385,6 +390,12 @@ function planReadout(events: TrajectoryEvent[]): string[] {
       lines.push(`  ${short} ${altitude.padStart(13)}  in ${formatDuration(apsis.time - sim.time)}`);
       events.push({ kind: apsis.kind, plan: true, time: apsis.time, position: apsis.position, label: `plan ${short} ${altitude}` });
     }
+  }
+  if (planTarget !== null && trajectory.count > 1) {
+    const end = trajectory.lastTime;
+    const target = sim.system.bodies[planTarget]!;
+    const gap = distance(trajectory.position(trajectory.count - 1), sim.ephemeris.bodyPosition(planTarget, end));
+    lines.push(`  end +${formatDuration(end - sim.time)}: ${formatDistance(gap - target.radiusMeters)}`, `    above ${target.name}'s surface`);
   }
   const impact = plan.impact;
   if (impact) {

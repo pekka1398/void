@@ -50,6 +50,13 @@ export class SceneView {
   private readonly vesselTrail: THREE.Line;
   private readonly predictionLine: THREE.Line;
   private readonly planLine: THREE.Line;
+  /** The target body's path over the same interval as the plan. */
+  private readonly targetLine: THREE.Line;
+  /** Rings where the vessel and the target are when the plan ends. */
+  private readonly planEndMarker: HTMLDivElement;
+  private readonly targetEndMarker: HTMLDivElement;
+  private target: number | null = null;
+  private targetCache: PathCache | null = null;
   private readonly thrustArrow: THREE.Line;
   private readonly vesselMarker: HTMLDivElement;
   private readonly eventMarkers: HTMLDivElement[] = [];
@@ -75,10 +82,13 @@ export class SceneView {
     this.vesselTrail = createFadingLine();
     this.predictionLine = createFadingLine();
     this.planLine = createFadingLine();
+    this.targetLine = createFadingLine();
     this.thrustArrow = createLine('#ff9a3c', 1);
-    this.scene.add(this.vesselTrail, this.predictionLine, this.planLine, this.thrustArrow);
+    this.scene.add(this.vesselTrail, this.predictionLine, this.planLine, this.targetLine, this.thrustArrow);
     this.vesselMarker = createMarker(overlay, 'Vessel', VESSEL_COLOR, 'vessel');
     this.vesselMarker.addEventListener('click', () => onPick({ kind: 'vessel' }));
+    this.planEndMarker = createMarker(overlay, '', PLAN_COLOR, 'ring');
+    this.targetEndMarker = createMarker(overlay, '', PLAN_COLOR, 'ring');
   }
 
   get frameEvaluator(): FrameEvaluator {
@@ -100,6 +110,12 @@ export class SceneView {
     this.invalidatePaths();
   }
 
+  /** Body whose path is drawn alongside the plan, or null. */
+  setTarget(index: number | null): void {
+    this.target = index;
+    this.targetCache = null;
+  }
+
   setEvents(events: TrajectoryEvent[]): void {
     this.events = events;
   }
@@ -109,6 +125,7 @@ export class SceneView {
     this.vesselCache = null;
     this.predictionCache = null;
     this.planCache = null;
+    this.targetCache = null;
   }
 
   /** Frame-coordinate position of the focus at the current time. */
@@ -124,6 +141,7 @@ export class SceneView {
     this.updateVesselCache(now);
     this.updatePredictionCache(now);
     this.updatePlanCache(now);
+    this.updateTargetCache(now);
     const predictionEnd = this.predictionEndFrame();
 
     const frameNow = this.frame.evaluate(now);
@@ -174,6 +192,7 @@ export class SceneView {
         shade: (t, out, offset) => (burns.some((b) => t >= b.startTime && t <= b.endTime) ? burning : coast)(t, out, offset),
       });
     }
+    const ends = this.updatePlanEnds(origin, bodyFrame);
     this.updateThrustArrow(frameNow, sub(vesselFrame, origin), arrowLength);
 
     this.vesselMarker.classList.toggle('crashed', this.sim.impact !== null);
@@ -187,7 +206,7 @@ export class SceneView {
       priority: (focus.kind === 'body' && focus.index === view.body.index ? 1e60 : 0) + view.body.massKg,
     }));
     entries.push({ marker: this.vesselMarker, relative: sub(vesselFrame, origin), priority: focus.kind === 'vessel' ? 1e60 : 1e50 });
-    entries.push(...this.eventEntries(origin));
+    entries.push(...this.eventEntries(origin), ...ends);
     entries.sort((a, b) => b.priority - a.priority);
     const shown: { x: number; y: number; w: number }[] = [];
     for (const entry of entries) {
@@ -294,6 +313,60 @@ export class SceneView {
       this.planCache = new PathCache(this.vesselInterval(now, plan.endTime - now));
     }
     this.planCache.update(Math.max(now, trajectory.firstTime), trajectory.lastTime, (t) => toFrame(this.frame.evaluate(t), trajectory.sample(t).position));
+  }
+
+  private centredOn(index: number): boolean {
+    const spec = this.frame.spec;
+    return (spec.kind === 'body-inertial' || spec.kind === 'body-surface') && spec.body === index;
+  }
+
+  private updateTargetCache(now: number): void {
+    const target = this.target;
+    const trajectory = this.sim.plan.trajectory;
+    if (target === null || !this.planCache || this.centredOn(target)) {
+      this.targetCache = null;
+      return;
+    }
+    // The plan cache is rebuilt for every new plan; follow it so the target path ends where the plan does.
+    if (!this.targetCache || this.targetCache.intervalSeconds !== this.planCache.intervalSeconds || this.planGeneration !== this.targetGeneration) {
+      this.targetGeneration = this.planGeneration;
+      this.targetCache = new PathCache(this.planCache.intervalSeconds);
+    }
+    this.targetCache.update(now, trajectory.lastTime, (t) => toFrame(this.frame.evaluate(t), this.sim.ephemeris.bodyPosition(target, t)));
+  }
+
+  private targetGeneration = -1;
+
+  /** Draws the target path and places the end rings; returns their label entries. */
+  private updatePlanEnds(origin: Vec3, bodyFrame: Vec3[]): MarkerEntry[] {
+    const entries: MarkerEntry[] = [];
+    const now = this.sim.time;
+    const plan = this.sim.plan;
+    const trajectory = plan.trajectory;
+    const showEnds = this.planCache !== null;
+    this.planEndMarker.style.display = 'none';
+    this.targetEndMarker.style.display = 'none';
+    this.targetLine.visible = false;
+    if (!showEnds) return entries;
+    const tail = trajectory.lastTime;
+    const frameTail = this.frame.evaluate(tail);
+    const vesselEnd = toFrame(frameTail, trajectory.position(trajectory.count - 1));
+    const when = `+${formatShortDuration(tail - now)}`;
+    this.planEndMarker.querySelector('span')!.textContent = `plan end ${when}`;
+    entries.push({ marker: this.planEndMarker, relative: sub(vesselEnd, origin), priority: 3e49 });
+    const target = this.target;
+    if (target === null) return entries;
+    const targetEnd = toFrame(frameTail, this.sim.ephemeris.bodyPosition(target, tail));
+    this.targetEndMarker.querySelector('span')!.textContent = `${this.sim.system.bodies[target]!.name} ${when}`;
+    entries.push({ marker: this.targetEndMarker, relative: sub(targetEnd, origin), priority: 3e49 - 1 });
+    if (this.targetCache) {
+      this.targetLine.visible = true;
+      const span = plan.endTime - now;
+      writeLine(this.targetLine, this.targetCache, origin, bodyFrame[target]!, targetEnd, {
+        headTime: now, tailTime: tail, presentFirst: true, shade: fadeShade(PLAN_RGB, (t) => (t - now) / span),
+      });
+    }
+    return entries;
   }
 
   private predictionEndFrame(): Vec3 | null {
@@ -491,4 +564,12 @@ function createMarker(overlay: HTMLElement, name: string, color: string, kind: s
   marker.querySelector('span')!.textContent = name;
   overlay.append(marker);
   return marker;
+}
+
+/** Compact duration for labels: 2.56 d, 5.3 h, 42 min. */
+function formatShortDuration(seconds: number): string {
+  if (!Number.isFinite(seconds)) throw new RangeError(`formatShortDuration(${seconds})`);
+  if (seconds >= 86_400) return `${(seconds / 86_400).toFixed(2)} d`;
+  if (seconds >= 3600) return `${(seconds / 3600).toFixed(1)} h`;
+  return `${(seconds / 60).toFixed(0)} min`;
 }

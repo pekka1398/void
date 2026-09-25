@@ -73,6 +73,8 @@ export interface PanelHandlers {
   planCoast(seconds: number): void;
   /** A value from the startPlanes choices; resets the vessel. */
   startPlane(value: string): void;
+  /** Body drawn alongside the plan, null for none. */
+  planTarget(index: number | null): void;
 }
 
 type FrameKind = FrameSpec['kind'];
@@ -103,7 +105,8 @@ export class Panel {
     root: HTMLElement,
     bodies: readonly CelestialBody[],
     initial: { frame: FrameSpec; focus: Focus; trailSpan: number; vesselSpan: number; predictionSpan: number; planCoast: number; system: SystemPresetId;
-      startPlanes: readonly [string, string][]; startPlane: string },
+      startPlanes: readonly [string, string][]; startPlane: string;
+      planTarget: number | null },
     handlers: PanelHandlers,
   ) {
     this.element = document.createElement('div');
@@ -138,6 +141,7 @@ export class Panel {
       <label>Reference <select data-k="reference"><option value="auto">Auto (sphere of influence)</option>${bodyOptions}</select></label>
       <label>Prediction <select data-k="horizon">${spanOptions(PREDICTION_SPANS, initial.predictionSpan)}</select></label>
       <div class="section">FLIGHT PLAN</div>
+      <label>Target <select data-k="plan-target"><option value="none">None</option>${bodyOptions}</select></label>
       <label>Coast after last burn <select data-k="plan-coast">${spanOptions(PLAN_COAST_SPANS, initial.planCoast)}</select></label>
       <div class="plan-list"></div>
       <div class="plan-buttons">
@@ -203,6 +207,9 @@ export class Panel {
     q<HTMLButtonElement>('plan-add').addEventListener('click', () => handlers.planAdd());
     this.removeButton.addEventListener('click', () => handlers.planRemove());
     this.warpButton.addEventListener('click', () => handlers.planWarp());
+    const targetSelect = q<HTMLSelectElement>('plan-target');
+    targetSelect.value = initial.planTarget === null ? 'none' : String(initial.planTarget);
+    targetSelect.addEventListener('change', () => handlers.planTarget(targetSelect.value === 'none' ? null : Number(targetSelect.value)));
     q<HTMLSelectElement>('plan-coast').addEventListener('change', (e) => handlers.planCoast(Number((e.target as HTMLSelectElement).value)));
     this.burnReference.addEventListener('change', () => handlers.planReference(Number(this.burnReference.value)));
     for (const button of this.planEditor.querySelectorAll<HTMLButtonElement>('[data-shift]')) {
