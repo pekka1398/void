@@ -47,6 +47,12 @@ export interface BodySpec {
    * Required for every body except the root.
    */
   orbit?: EllipticElements;
+  /**
+   * Reference plane of the elements: the ecliptic, or the parent body's
+   * equator (x at its equinox node, z along its spin axis) for moons that
+   * orbit in their planet's equatorial plane. Required with an orbit.
+   */
+  orbitPlane?: 'ecliptic' | 'parent-equator';
   children: BodySpec[];
 }
 
@@ -104,7 +110,23 @@ function assertBodySpec(spec: BodySpec, isRoot: boolean): void {
 function assertOrbit(spec: BodySpec, isRoot: boolean): void {
   if (isRoot && spec.orbit) throw new RangeError(`${spec.id}: the root body cannot have an orbit`);
   if (!isRoot && !spec.orbit) throw new RangeError(`${spec.id}: a non-root body requires an orbit`);
+  if ((spec.orbit !== undefined) !== (spec.orbitPlane !== undefined)) throw new RangeError(`${spec.id}: orbit and orbitPlane go together`);
+  if (spec.orbitPlane !== undefined && spec.orbitPlane !== 'ecliptic' && spec.orbitPlane !== 'parent-equator') {
+    throw new RangeError(`${spec.id}: orbit plane ${String(spec.orbitPlane)}`);
+  }
   if (spec.orbit) assertEllipticElements(spec.orbit, spec.id);
+}
+
+/** A state given in the parent's equatorial axes (see BodyRotation.equatorialAxes), in ecliptic axes. */
+function toEcliptic(state: { position: Vec3; velocity: Vec3 }, parent: BodySpec): { position: Vec3; velocity: Vec3 } {
+  const rot = parent.rotation;
+  if ('kind' in rot) throw new RangeError(`${parent.id}: a tidally locked body cannot be an equatorial reference plane`);
+  const ob = rot.obliquityRadians, lon = rot.poleLongitudeRadians;
+  const z: Vec3 = { x: Math.sin(ob) * Math.cos(lon), y: Math.sin(ob) * Math.sin(lon), z: Math.cos(ob) };
+  const x: Vec3 = { x: -Math.sin(lon), y: Math.cos(lon), z: 0 };
+  const y = cross(z, x);
+  const map = (v: Vec3): Vec3 => add(add(scale(x, v.x), scale(y, v.y)), scale(z, v.z));
+  return { position: map(state.position), velocity: map(state.velocity) };
 }
 
 /** Placeholder until the parent resolves a locked rotation; never left in a built system. */
@@ -180,7 +202,9 @@ export function buildSystem(spec: SystemSpec): BuiltSystem {
       const orbit = child.orbit;
       if (!orbit) throw new RangeError(`${child.id}: missing orbit`);
       const gm = GRAVITATIONAL_CONSTANT * (innerMass + childMass);
-      const relative = stateFromElements(orbit, gm);
+      const relative = child.orbitPlane === 'parent-equator'
+        ? toEcliptic(stateFromElements(orbit, gm), node)
+        : stateFromElements(orbit, gm);
       const childBody = bodies[childPlaced[0]!.index]!;
       childBody.orbitPeriodSeconds = orbitalPeriodSeconds(orbit.semiMajorAxisMeters, gm);
       childBody.periapsisFraction = 1 - orbit.eccentricity;

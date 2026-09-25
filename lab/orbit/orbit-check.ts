@@ -28,7 +28,7 @@ const MU_EARTH = GRAVITATIONAL_CONSTANT * EARTH_MASS;
 const staticSpin = { periodSeconds: SECONDS_PER_DAY, obliquityRadians: 0, poleLongitudeRadians: 0, angleAtEpochRadians: 0 };
 
 function body(id: string, massKg: number, radiusMeters: number, orbit?: EllipticElements, children: BodySpec[] = []): BodySpec {
-  return { id, name: id, massKg, radiusMeters, color: '#fff', rotation: staticSpin, ...(orbit ? { orbit } : {}), children };
+  return { id, name: id, massKg, radiusMeters, color: '#fff', rotation: staticSpin, ...(orbit ? { orbit, orbitPlane: 'ecliptic' as const } : {}), children };
 }
 
 function lonePlanet(): Ephemeris {
@@ -194,7 +194,9 @@ function findSpec(node: BodySpec, id: string): BodySpec {
       atMid = Math.max(atMid, distance(coarse.bodyPosition(b.index, (k + 0.5) * step), fine.bodyPosition(b.index, (k + 0.5) * step)));
     }
   }
-  check('ephemeris integration', atSample < 0.2, `60 d, step vs half step at samples ${fmt(atSample)} m`);
+  // The worst body is Io (Ember): 0.15-0.4 m over its 34 orbits depending on the
+  // other resonant moons, about 1e-9 of its orbit; planets and Selene stay at millimetres.
+  check('ephemeris integration', atSample < 1, `60 d, step vs half step at samples ${fmt(atSample)} m`);
   check('ephemeris interpolation', atMid - atSample < 1e-3, `mid-step excess ${fmt(atMid - atSample)} m`);
   check('ephemeris range enforced', throws(() => coarse.bodyPosition(0, span * 2)), 'query past coverage throws');
   coarse.forgetBefore(30 * SECONDS_PER_DAY);
@@ -429,6 +431,22 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
   }
   check('tidally locked moons', Math.abs(tiltToEcliptic - (6.68 - 5.145)) < 1e-9 && worstMoon < 9 && worstEmber < 2,
     `Selene equator ${tiltToEcliptic.toFixed(3)} deg from the ecliptic; over a year the near side stays within ${worstMoon.toFixed(1)} deg of Aurelia (Ember ${worstEmber.toFixed(1)} deg of Velvet)`);
+}
+
+{
+  // Moons given in their planet's equatorial plane orbit there.
+  const system = buildSystem(SYSTEM_PRESETS.sol);
+  const tilt = (id: string): number => {
+    const moon = system.bodies.find((b) => b.id === id)!;
+    const p = moon.parentIndex!;
+    const r = { x: system.positions[moon.index * 3]! - system.positions[p * 3]!, y: system.positions[moon.index * 3 + 1]! - system.positions[p * 3 + 1]!, z: system.positions[moon.index * 3 + 2]! - system.positions[p * 3 + 2]! };
+    const v = { x: system.velocities[moon.index * 3]! - system.velocities[p * 3]!, y: system.velocities[moon.index * 3 + 1]! - system.velocities[p * 3 + 1]!, z: system.velocities[moon.index * 3 + 2]! - system.velocities[p * 3 + 2]! };
+    return Math.acos(dot(normalize(cross(r, v)), spinAxis(system.bodies[p]!))) / DEGREES;
+  };
+  const haze = tilt('haze'), ember = tilt('ember');
+  const halo = system.bodies.find((b) => b.id === 'halo')!;
+  check('equatorial moon orbits', Math.abs(haze - 0.34854) < 0.01 && Math.abs(ember - 0.05) < 0.01 && Math.abs(halo.rotation.obliquityRadians / DEGREES - 28.05) < 0.01,
+    `Haze ${haze.toFixed(3)} deg from Halo's equator (given 0.349; Halo's equator is ${(halo.rotation.obliquityRadians / DEGREES).toFixed(2)} deg from the ecliptic), Ember ${ember.toFixed(3)} deg from Velvet's`);
 }
 
 // --- Thrust, rocket equation, finite burns -------------------------------------

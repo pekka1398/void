@@ -69,12 +69,24 @@ All values are SI. The frame is ecliptic and right-handed, with +Z at ecliptic n
 
 Defaults chosen from measurements in `orbit-check.ts`:
 
-- Ephemeris step: 256 steps per tightest Jacobi periapsis passage. This gives 594 s for the Sol system, which is set by Ember's 1.77-day orbit. The integration difference against a half-size step over 60 days is 6 cm. Interpolation adds less than 0.1 mm. Energy drift over 10 years is about 1e-12, and 10 years takes about 2 s.
+- Ephemeris step: 256 steps per tightest Jacobi periapsis passage. This gives 594 s for the Sol system, which is set by Ember's 1.77-day orbit. Against a half-size step over 60 days, the planets and Selene differ by millimetres and Io (Ember) by up to 0.4 m (about 1e-9 of its orbit, set by its resonant neighbours). Interpolation adds less than 0.1 mm. Energy drift over 10 years is about 3e-13, and 10 years of the 15-body system takes about 5 s.
 - Vessel tolerances: 1e-4 m and 1e-7 m/s per step. This is about 250 steps per orbit, with 0.8 m error over 20 eccentric orbits against analytic Kepler.
 
 ## Fixtures (`src/app/SystemPresets.ts`)
 
-- `sol`: real Sun, Mercury, Earth, Moon, Mars, Jupiter and three Galilean moons, under fictional names.
+- `sol`: the real Sun, the eight planets, the Moon, Jupiter's four Galilean moons and Saturn's Titan, under fictional names:
+
+  | Lab | Real | | Lab | Real |
+  |---|---|---|---|---|
+  | Sol | Sun | | Velvet | Jupiter |
+  | Cinder | Mercury | | Ember, Rime, Hollow, Umber | Io, Europa, Ganymede, Callisto |
+  | Vesper | Venus | | Halo | Saturn |
+  | Aurelia | Earth | | Haze | Titan |
+  | Selene | Moon | | Azure | Uranus |
+  | Ares | Mars | | Abyss | Neptune |
+
+  - Planet elements are J2000 mean heliocentric elements. Spin axes come from the IAU pole directions; Venus and Uranus spin retrograde.
+  - Orbit elements are relative to the ecliptic, or, with `orbitPlane: 'parent-equator'`, to the parent's equator. The Galilean moons and Titan use the equator, since they orbit in their planet's equatorial plane; Titan's is 28° from the ecliptic. Saturn's small inner moons are left out because their sub-day orbits would shrink the ephemeris step.
   - The moons are tidally locked (`LockedRotationSpec`). Each spins at its real mean sidereal period, and its spin axis follows from its orbit: Selene's lies 6.68° from its orbit normal, on the far side of ecliptic north (Cassini state), so its equator is 1.54° from the ecliptic. Its near side faces the parent's mean direction, and over a year it stays within 8° of Aurelia (the real libration is ±7.9°).
   - Selene's initial semi-major axis is 381,487 km rather than the mean distance 384,400 km. Perturbed by the Sun, it then gives the real 27.3217-day sidereal month and a mean distance of 384,830 km. Starting at 384,400 km gives 27.64 days.
 - `binary`: a circumbinary system in the spirit of the game's Astris Prime, using real-scale bodies.
