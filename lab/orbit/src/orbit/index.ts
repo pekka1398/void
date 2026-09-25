@@ -6,3 +6,7 @@ export * from './Ephemeris';
 export * from './Dopri5';
 export * from './Trajectory';
 export * from './VesselPropagator';
+export * from './BodyRotation';
+export * from './ReferenceFrames';
+export * from './Dominance';
+export * from './Simulation';

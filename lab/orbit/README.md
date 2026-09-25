@@ -5,17 +5,34 @@ Standalone experiment for Principia-style orbital mechanics: every massive body 
 ```sh
 cd lab/orbit
 npm ci
+npm run dev        # lab page (Vite prints the URL)
 npm run check      # headless invariant checks
 npm run typecheck
 ```
+
+## Page
+
+The page uses a plain three.js `WebGLRenderer` with a logarithmic depth buffer. Bodies are solid-colour spheres drawn to true scale, with an equator and a prime meridian so rotation is visible. Stars are unlit and carry a point light with no distance decay. Rendering uses kilometres relative to the focused object (floating origin), so float32 precision is spent near the focus.
+
+- **System**: the fixture to load. Changing it reloads the page with `?system=sol|binary`.
+- **Frame**: the frame everything is plotted in:
+  - barycentric inertial
+  - body centred inertial
+  - body surface (rotating with the body, including its axial tilt)
+  - two-body rotating: origin at the pair's barycenter, x from primary to secondary, z along their relative angular momentum.
+- **Focus**: the object the camera orbits. Clicking a label or pressing `Tab` also changes it.
+- **Body trails / Vessel history**: past paths in the selected frame. A body's trail is at most one of its own orbital periods. Past samples are cached in frame coordinates because a frame's transform depends only on the sample time, so only new samples cost anything.
+- **Readout**: osculating two-body values relative to the body whose Laplace sphere of influence contains the vessel. This choice only affects display; the dynamics are always full N-body.
+- `Space` pauses, and `,` `.` change warp from 1× to 1e7×. Each frame spends at most 20,000 vessel steps. When warp asks for more, simulated time advances only as far as those steps reach and the status shows `LAGGING` with the warp actually achieved. Time is never skipped.
+- Labels that would overlap a higher-priority label (focus, then vessel, then bodies by mass) keep only their dot.
 
 ## Status
 
 | Phase | Scope | State |
 |---|---|---|
 | P1 | Ephemeris, vessel integrator, headless checks | done |
-| P2 | Viewer: system, trajectories, time warp, reference frames | next |
-| P3 | Vessel control, finite burns, prediction | |
+| P2 | Viewer: system, trajectories, time warp, reference frames | done |
+| P3 | Vessel control, finite burns, prediction | next |
 | P4 | Flight plan (maneuver nodes) | |
 
 ## Core (`src/orbit/`)

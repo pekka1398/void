@@ -97,6 +97,11 @@ export class Ephemeris {
     return this.epochSeconds + this.lastStep * this.stepSeconds;
   }
 
+  /** Bytes held by retained samples. */
+  get retainedBytes(): number {
+    return this.chunks.size * this.chunkSteps * this.bodyCount * SAMPLE_STRIDE * Float64Array.BYTES_PER_ELEMENT;
+  }
+
   /** Integrate forward until the covered interval contains t. */
   extendTo(t: number): void {
     if (!Number.isFinite(t)) throw new RangeError(`Ephemeris.extendTo(${t})`);

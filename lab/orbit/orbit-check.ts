@@ -1,6 +1,6 @@
 import { SYSTEM_PRESETS } from './src/app/SystemPresets';
 import {
-  DEGREES, Dopri5, Ephemeris, GRAVITATIONAL_CONSTANT, PropagationRun, SECONDS_PER_DAY,
+  DEGREES, FrameEvaluator, Simulation, bodyOrientation, cross, dot, toFrame, Dopri5, Ephemeris, GRAVITATIONAL_CONSTANT, PropagationRun, SECONDS_PER_DAY,
   SECONDS_PER_JULIAN_YEAR, Trajectory, VesselPropagator, buildSystem, distance, length, orbitalPeriodSeconds,
   osculatingOrbit, solveKeplerElliptic, stateFromElements, sub, suggestedStepSeconds,
   type BodySpec, type EllipticElements, type SystemSpec,
@@ -306,6 +306,90 @@ check('start inside body rejected', throws(() => new VesselPropagator(lonePlanet
   const mid = traj.sample(0.5 * (traj.time(10) + traj.time(11)));
   const midR = distance(mid.position, eph.bodyPosition(home.index, 0.5 * (traj.time(10) + traj.time(11))));
   check('trajectory interpolation', Math.abs(midR - r) < 5e3, `mid-step radius ${(midR / 1e3).toFixed(3)} km vs ${(r / 1e3).toFixed(3)} km`);
+}
+
+// --- Body rotation and reference frames ---------------------------------------
+{
+  const sys = buildSystem(SYSTEM_PRESETS.sol);
+  const earth = sys.bodies.find((b) => b.id === 'aurelia')!;
+  let worstOrtho = 0;
+  for (const t of [0, 1234.5, 3.3e6, 9.9e7]) {
+    const b = bodyOrientation(earth, t);
+    const handed = dot(cross(b.x, b.y), b.z);
+    worstOrtho = Math.max(worstOrtho, Math.abs(dot(b.x, b.y)), Math.abs(dot(b.y, b.z)), Math.abs(dot(b.x, b.z)),
+      Math.abs(length(b.x) - 1), Math.abs(length(b.y) - 1), Math.abs(handed - 1));
+  }
+  const b0 = bodyOrientation(earth, 0);
+  const b1 = bodyOrientation(earth, earth.rotation.periodSeconds);
+  const tilt = Math.acos(b0.z.z) / DEGREES;
+  check('body axes', worstOrtho < 1e-14 && distance(b0.x, b1.x) < 1e-12 && Math.abs(tilt - 23.44) < 1e-9,
+    `orthonormality ${fmt(worstOrtho)}, one sidereal day returns the meridian, obliquity ${tilt.toFixed(4)} deg`);
+
+  const eph = new Ephemeris(sys, { stepSeconds: suggestedStepSeconds(sys.bodies, STEPS_PER_ORBIT), chunkSteps: 2048 });
+  const moon = sys.bodies.find((b) => b.id === 'selene')!;
+  eph.extendTo(60 * SECONDS_PER_DAY);
+  const rotating = new FrameEvaluator(eph, { kind: 'two-body-rotating', primary: earth.index, secondary: moon.index });
+  let offAxis = 0;
+  for (let t = 0; t <= 60 * SECONDS_PER_DAY; t += 0.37 * SECONDS_PER_DAY) {
+    const f = rotating.evaluate(t);
+    const m = toFrame(f, rotating.position(moon.index));
+    const e = toFrame(f, rotating.position(earth.index));
+    offAxis = Math.max(offAxis, Math.abs(m.y), Math.abs(m.z), Math.abs(e.y), Math.abs(e.z));
+    if (!(m.x > 0 && e.x < 0)) offAxis = Number.POSITIVE_INFINITY;
+  }
+  const period = rotating.rotationPeriodSeconds(0) / SECONDS_PER_DAY;
+  check('two-body rotating frame', offAxis < 1e-4 && period > 25 && period < 30,
+    `(1 AU coordinates resolve ~3e-5 m) bodies stay on the x axis within ${fmt(offAxis)} m, rotation period ${period.toFixed(2)} d`);
+
+  const surface = new FrameEvaluator(eph, { kind: 'body-surface', body: earth.index });
+  let drift = 0;
+  for (let t = 0; t <= 5 * SECONDS_PER_DAY; t += 3571) {
+    const f = surface.evaluate(t);
+    const axes = bodyOrientation(earth, t);
+    const c = surface.position(earth.index);
+    const fixed = { x: 1e6, y: -2e6, z: 6e6 };
+    const world = {
+      x: c.x + fixed.x * axes.x.x + fixed.y * axes.y.x + fixed.z * axes.z.x,
+      y: c.y + fixed.x * axes.x.y + fixed.y * axes.y.y + fixed.z * axes.z.y,
+      z: c.z + fixed.x * axes.x.z + fixed.y * axes.y.z + fixed.z * axes.z.z,
+    };
+    drift = Math.max(drift, distance(toFrame(f, world), fixed));
+  }
+  check('surface frame', drift < 1e-4, `a body-fixed point moves ${fmt(drift)} m in the surface frame`);
+}
+
+// --- Simulation driver ------------------------------------------------------------
+{
+  const sim = new Simulation({
+    system: SYSTEM_PRESETS.sol, stepsPerOrbit: STEPS_PER_ORBIT, tolerances: TOLERANCES,
+    vesselStart: { homeBodyId: 'aurelia', altitudeMeters: 400e3, inclinationRadians: 0 },
+    retentionSeconds: 2 * SECONDS_PER_DAY,
+  });
+  const positions = new Float64Array(sim.ephemeris.bodyCount * 3);
+  sim.ephemeris.positionsAt(0, positions);
+  const at = (id: string, dx: number) => {
+    const i = sim.bodyIndex(id);
+    return sim.dominance.dominant(positions, { x: positions[i * 3]! + dx, y: positions[i * 3 + 1]!, z: positions[i * 3 + 2]! });
+  };
+  check('dominance', at('aurelia', 7e6) === sim.bodyIndex('aurelia') && at('selene', 3e6) === sim.bodyIndex('selene')
+    && at('aurelia', 5e9) === sim.bodyIndex('sol') && at('ember', 3e6) === sim.bodyIndex('ember'),
+    'LEO -> Aurelia, near Selene -> Selene, far -> Sol, near Ember -> Ember');
+
+  const partial = sim.advance(SECONDS_PER_DAY, 50);
+  check('budget-limited advance', !partial.completed && partial.steps === 50 && sim.time > 0 && sim.time < SECONDS_PER_DAY,
+    `stopped at T+${sim.time.toFixed(1)} s after ${partial.steps} steps, time never skipped`);
+  let guard = 0;
+  while (sim.time < 3 * SECONDS_PER_DAY) { sim.advance(3 * SECONDS_PER_DAY - sim.time, 1e6); guard += 1; }
+  check('history retention', sim.history.firstTime <= sim.time - 2 * SECONDS_PER_DAY && sim.history.firstTime > sim.time - 2.1 * SECONDS_PER_DAY
+    && sim.ephemeris.startTime <= sim.time - 2 * SECONDS_PER_DAY,
+    `history from T+${(sim.history.firstTime / 3600).toFixed(2)} h, ephemeris from T+${(sim.ephemeris.startTime / 3600).toFixed(2)} h at T+${(sim.time / 3600).toFixed(1)} h`);
+
+  const crash = new Simulation({
+    system: SYSTEM_PRESETS.sol, stepsPerOrbit: STEPS_PER_ORBIT, tolerances: TOLERANCES,
+    vesselStart: { homeBodyId: 'aurelia', altitudeMeters: -1e3, inclinationRadians: 0 },
+    retentionSeconds: SECONDS_PER_DAY,
+  });
+  check('start below surface panics', throws(() => crash.advance(10, 100)), 'throws');
 }
 
 if (failures.length > 0) {
