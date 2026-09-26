@@ -1,4 +1,4 @@
-import { buildSystem, Ephemeris, GRAVITATIONAL_CONSTANT, suggestedStepSeconds, type SystemSpec } from '../orbitCore';
+import { buildSystem, Ephemeris, GRAVITATIONAL_CONSTANT, suggestedStepSeconds, type BodySpec, type SystemSpec } from '../orbitCore';
 import { SYSTEM_PRESETS } from '../../../orbit/src/app/SystemPresets';
 import { terrainFromConfig, type TerrainConfig } from '../terrain/TerrainConfig';
 import type { Terrain } from '../terrain/Surface';
@@ -74,19 +74,47 @@ export function earthSize(): LandingPlanet {
  * Sun's and Selene's tides and orbits among real neighbours.
  */
 export function aurelia(): LandingPlanet {
-  const system = SYSTEM_PRESETS.sol;
+  return aureliaWithSpin(1);
+}
+
+/**
+ * Aurelia spinning ten times faster (a 2.4 h day): the ground moves 4.5 km/s
+ * at the launch site and the centrifugal pull is a third of gravity, so the
+ * rotating frame's effects are plain to see in flight. Everything else,
+ * including J2, is the sol preset's.
+ */
+export function aureliaFast(): LandingPlanet {
+  return aureliaWithSpin(10);
+}
+
+function aureliaWithSpin(spinFactor: number): LandingPlanet {
+  const system = spinFactor === 1 ? SYSTEM_PRESETS.sol : withFasterSpin(SYSTEM_PRESETS.sol, 'aurelia', spinFactor);
   const body = buildSystem(system).bodies.find((b) => b.id === 'aurelia');
   if (!body) throw new Error('Planets.ts: the sol preset has no aurelia');
   const terrainConfig: TerrainConfig = { kind: 'hills', options: { name: 'Aurelia hills', radiusMeters: body.radiusMeters,
     maxHeightMeters: 8000, wavelengthMeters: 40_000, octaves: 8 } };
   const gravity = body.gm / body.radiusMeters ** 2;
   return {
-    label: `AURELIA · SOL SYSTEM · ${(body.radiusMeters / 1e3).toFixed(0)} km RADIUS · ${gravity.toFixed(2)} m/s² · ${(body.rotation.periodSeconds / 3600).toFixed(1)} h DAY`,
+    label: `AURELIA${spinFactor === 1 ? '' : ` (SPIN ×${spinFactor})`} · SOL SYSTEM · ${(body.radiusMeters / 1e3).toFixed(0)} km RADIUS · ${gravity.toFixed(2)} m/s² · ${(body.rotation.periodSeconds / 3600).toFixed(1)} h DAY`,
     bodyId: body.id, system, terrainConfig, terrain: terrainFromConfig(terrainConfig),
   };
 }
 
-export const PLANETS = { pebble, luna: moonSize, terra: earthSize, aurelia } as const;
+/** A copy of the system with one body's (free, not locked) spin sped up by `factor`. */
+function withFasterSpin(system: SystemSpec, bodyId: string, factor: number): SystemSpec {
+  let found = false;
+  const copy = (node: BodySpec): BodySpec => {
+    if (node.id !== bodyId) return { ...node, children: node.children.map(copy) };
+    if ('kind' in node.rotation) throw new Error(`Planets.ts: ${bodyId} is tidally locked; its spin follows its orbit`);
+    found = true;
+    return { ...node, rotation: { ...node.rotation, periodSeconds: node.rotation.periodSeconds / factor }, children: node.children.map(copy) };
+  };
+  const root = copy(system.root);
+  if (!found) throw new Error(`Planets.ts: ${bodyId} is not in system ${system.name}`);
+  return { ...system, root };
+}
+
+export const PLANETS = { pebble, luna: moonSize, terra: earthSize, aurelia, 'aurelia-fast': aureliaFast } as const;
 
 /**
  * The planet's system integrated as an ephemeris, and the planet's index in it.

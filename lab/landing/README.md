@@ -24,6 +24,7 @@ npm run dev        # interactive page
 - `pebble` (`src/planet/Planets.ts`): 100 km radius and a Moon-like 1.6 m/s² surface gravity, which makes it far denser than real rock. A 3.5 h spin moves the equator at 50 m/s, so rotating-frame effects are large enough to test. Placeholder hills reach up to 3 km.
 - The checks also run at Earth size (6371 km), so precision problems show up early.
 - `aurelia`: the orbit lab's Earth analogue inside its full sol system, with the Sun, the planets and Selene, a 23.4° axial tilt, and terra's placeholder hills. It is the first planet that is not alone: the rocket stands on body `bodyIndex` of a many-body ephemeris, and the rotating frame carries the Sun's and Selene's tides. `planetEphemeris(planet)` builds any planet's ephemeris and returns its index. A lone planet steps one minute; a system uses the orbit lab's suggested step. The per-planet launch-and-return and drawn-equals-collision checks cover it like the others.
+- `aurelia-fast`: Aurelia spinning ten times faster, a 2.4 h day, to make the rotating frame plain to see. At the launch site the ground moves 4.5 km/s and the centrifugal pull is about a third of gravity. Everything else, including J2, is the sol preset's.
 
 ## Shared with lab/flight
 

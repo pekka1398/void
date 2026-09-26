@@ -19,7 +19,7 @@ npm run typecheck
 
 ## The page
 
-- **Planet.** The default is Aurelia inside the full sol system: the Sun, the planets and Selene, with a 23.4° axial tilt, all integrated as one N-body ephemeris. Its terrain is terra's placeholder hills, streamed as lab/lod tiles. `?planet=` also accepts the landing lab's lone planets (pebble, luna, terra).
+- **Planet.** The default is Aurelia inside the full sol system: the Sun, the planets and Selene, with a 23.4° axial tilt, all integrated as one N-body ephemeris. Its terrain is terra's placeholder hills, streamed as lab/lod tiles. `?planet=` also accepts the landing lab's lone planets (pebble, luna, terra), and `aurelia-fast`, which is Aurelia with a 2.4 h day for seeing the rotation in flight.
 - **Rendering.** Everything is in the inertial ecliptic frame, relative to the upper stage, with float64 subtraction on the CPU and a logarithmic depth buffer.
   - Tiles and rocket attitudes are body-fixed. They are turned into the scene by the planet's current orientation (`FlightFrame.bodyFixedToRender`).
   - The Sun lights the scene from its real direction, and a little ambient light keeps the night side flyable.
@@ -35,7 +35,7 @@ npm run typecheck
   - Upper stage: 20 kN, Isp 340 s, thrust-to-weight about 1.5, 5.1 km/s, 183 s burn.
   - It takes a gravity turn: climb, then pitch toward the east, which is where the ground's 450 m/s helps.
 - **HUD** is laid out after KSP, in this lab's plain style:
-  - Top left: mission time and time rate (1×, 5×, 20×; click or `,`/`.`).
+  - Top left: mission time and time rate (1×, 5×, 20×, 100×, 200×; click or `,`/`.`).
   - Bottom left: the stages, with each part's own fuel and its vacuum Δv (the booster's counts the upper stage it pushes); the next stage is yellow, the burning one green.
   - Bottom centre: throttle, then altitude above speed in one box.
     - Click the altitude's label to switch AGL (above the ground under the rocket) and ALT (above the reference radius).
@@ -66,6 +66,11 @@ The **Draw terrain (profiling)** checkbox in the dev panel hides terrain draws w
 
 ## Not here yet
 
-- **Time warp in flight.** The landing lab's physics runs at 1–20×. Orbital warp needs on-rails propagation, plus a warp limit by altitude so tile builds keep up (see lab/view: about 10 new tiles per simulated second at 100 km).
+- **Time warp.** The rate goes up to 200× (for watching day and night, most of all on `aurelia-fast`), but with no on-rails mode and no limit by altitude:
+  - In orbital flight the propagation is cheap, under 1 ms a frame at 200×.
+  - In contact (on or near the ground), Rapier steps at 1/60 s cost about 0.5 ms each. That is 48 ms a frame at 100× and 94 ms at 200×.
+  - A frame advances at most 50 ms of wall time. So near the ground the simulated rate falls far below the chosen one, around 30× at 200×.
+  - Tile builds do not keep up at high rates (see lab/view: about 10 new tiles per simulated second at 100 km), so the ground stays coarse until they catch up.
+  - A real warp needs on-rails parts near the ground and a warp limit by altitude.
 - **Map interaction:** manoeuvre nodes and the flight plan (lab/orbit has them).
 - Atmosphere, terrain on other bodies, docking.

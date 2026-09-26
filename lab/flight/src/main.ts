@@ -61,7 +61,7 @@ let prediction: CoastPrediction | null = null;
 let predictionAt = -Infinity;
 let predictionGeneration = 0;
 
-const TIME_RATES = [1, 5, 20] as const;
+const TIME_RATES = [1, 5, 20, 100, 200] as const;
 let timeRate: number = TIME_RATES[0];
 let altitudeMode: 'agl' | 'alt' = 'agl';
 let speedMode: 'surface' | 'orbit' = 'surface';
