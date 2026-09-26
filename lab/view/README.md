@@ -26,7 +26,7 @@ npm run typecheck
 
 ## Decision (2026-09-25)
 
-**Single view.** Zooming out from the vessel turns into the map without a switch. The camera's up vector swings from the local vertical to the planet's north as the map fades in, and that turn is part of the effect, not a side effect to hide. The split mode stays here only for comparison. Development continues with the single view, and it is the one merged into the landing lab.
+**Single view.** Zooming out from the vessel turns into the map without a switch. The map fades in first; then, zooming further, the camera's up vector swings from the local vertical to the planet's north. That turn is part of the effect, not a side effect to hide, but it is kept apart from the fade so only one thing changes at a time. The split mode stays here only for comparison. Development continues with the single view, and it is the one merged into the landing lab.
 
 ## What KSP does
 
@@ -57,11 +57,14 @@ Everything is in one float64 world, drawn relative to the focus with a logarithm
   - A tile is culled only if it is below both observers' horizons, so a camera far out sees the planet's face toward it.
 - **Camera** (`ViewCamera.ts`): one direction (focus to camera) in the inertial frame, and a distance. Each frame, `viewState` decides:
   - **Map weight** (0 = flight, 1 = map).
-    - Single mode: a log-distance smoothstep between 0.02 and 0.2 radii of the reference body. On Aurelia that is about 127 km to 1,270 km from the vessel, or above a focused body's surface.
+    - Single mode: a log-distance smoothstep between 0.00063 and 0.0063 radii of the reference body. On Aurelia that is about 4 km to 40 km from the vessel, or above a focused body's surface. It starts where lab/flight's 4 m rocket shrinks to about 1 px, so the path and the vessel's label take over from the rocket itself.
     - Split mode: exactly 0 or 1.
     - Orbit lines and labels are drawn at this opacity. Labels only take clicks above 0.5.
-  - **Up**: the local vertical turned toward the body's north by the map weight. The flight view keeps the horizon level, and the map has north up.
-  - **Co-rotation**: the fraction of the reference body's spin the camera follows. It is `(1 - map weight) × (1 - smoothstep(altitude, 0.004 R, 0.012 R))`.
+  - **Up weight** (0 = local vertical, 1 = the body's north).
+    - Single mode: its own log-distance smoothstep, between 0.063 and 0.63 radii (400 km to 4,000 km on Aurelia). It starts only well after the map is fully in (40 km on Aurelia), so zooming out shows the orbits first and turns the camera after; the two never happen at once.
+    - Split mode: the same as the map weight.
+    - The up is the local vertical turned toward north by this weight. The flight view keeps the horizon level, and the map has north up.
+  - **Co-rotation**: the fraction of the reference body's spin the camera follows. It is `(1 - up weight) × (1 - smoothstep(altitude, 0.004 R, 0.012 R))`, so the camera lets go of the ground together with the up turn, not while the map fades in.
     - A landed or low vessel's view turns with the ground.
     - An orbiting vessel's close-up is inertial, like KSP's orbital camera.
     - The map is always inertial.
@@ -79,7 +82,7 @@ Everything is in one float64 world, drawn relative to the focus with a logarithm
 
 The dev server logs each session to `lab-log/view.jsonl`:
 
-- once per second: map weight, co-rotation, distance, tiles drawn, and frame, LOD and draw times;
+- once per second: map weight, up weight, co-rotation, distance, tiles drawn, and frame, LOD and draw times;
 - on every focus change and map switch.
 
 ## Not here yet

@@ -3,9 +3,14 @@ import * as THREE from 'three';
 import { bodyOrientation, cross, DominanceTree, dot, length, normalize, spinAxis, sub, type Vec3 } from './src/orbitCore';
 import { demoRocket, planetById, planetEphemeris, predictCoast, PartJointRocket, type LanderControl } from './src/landingCore';
 import { OrbitCamera, viewState } from '../view/src/ViewCamera';
-import { bodyFixedToRender, quatMultiply, quatRotate, renderAxes } from './src/FlightFrame';
+import { bodyFixedToRender, quatMultiply, quatRotate, renderAxes, vesselAxes } from './src/FlightFrame';
+import { navballBasis, toBall } from './src/navballCore';
 
 let failures = 0;
+const normalizeQuat = (q: { x: number; y: number; z: number; w: number }) => {
+  const n = Math.hypot(q.x, q.y, q.z, q.w);
+  return { x: q.x / n, y: q.y / n, z: q.z / n, w: q.w / n };
+};
 function check(label: string, ok: boolean, detail: string): void {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}: ${detail}`);
   if (!ok) failures += 1;
@@ -100,6 +105,19 @@ const launch = () => PartJointRocket.landed(RAPIER, ephemeris, bodyIndex, planet
   check('map path matches the body-fixed forecast', compared >= 5 && worst < 1e-3 && reference === bodyIndex && pastImpact >= 0 && pastImpact <= 15,
     `${compared} points, largest difference ${worst.toExponential(1)} m; ${trajectory.count} inertial samples to T+${trajectory.lastTime.toFixed(0)} s; impact ${prediction.impact ? `at T+${prediction.impact.time.toFixed(1)} s, path ends ${pastImpact.toFixed(2)} s after it` : 'none'}; reference ${ephemeris.bodies[reference]!.name}`);
   lander.free();
+}
+
+{
+  // The navball's screen axes agree with the steering keys: S (torque about local +x) moves the nose
+  // up the ball, D (about local +z) to the right, whatever the attitude.
+  const attitude = normalizeQuat({ x: 0.3, y: -0.5, z: 0.2, w: 0.8 });
+  const { nose, top } = vesselAxes(attitude);
+  const basis = navballBasis({ nose, top, up: normalize({ x: 0.2, y: 0.9, z: 0.4 }), pole: { x: 0, y: 0, z: 1 }, primeMeridian: { x: 1, y: 0, z: 0 }, velocity: { x: 0, y: 0, z: 0 } });
+  const a = 0.01;
+  const turned = (axis: Vec3) => toBall(basis, vesselAxes(quatMultiply(attitude, { x: axis.x * Math.sin(a / 2), y: axis.y * Math.sin(a / 2), z: axis.z * Math.sin(a / 2), w: Math.cos(a / 2) })).nose);
+  const s = turned({ x: 1, y: 0, z: 0 }), d = turned({ x: 0, y: 0, z: 1 });
+  check('navball follows the steering keys', s.y > 0.9 * a && Math.abs(s.x) < 1e-9 && d.x > 0.9 * a && Math.abs(d.y) < 1e-9,
+    `a 0.01 rad turn: S moves the nose to ball (${s.x.toExponential(1)}, ${s.y.toExponential(2)}), D to (${d.x.toExponential(2)}, ${d.y.toExponential(1)})`);
 }
 
 if (failures > 0) {

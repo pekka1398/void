@@ -165,6 +165,17 @@ export class PartJointRocket {
     const s = this.parts[which];
     return s.wreck ? 'destroyed' : s.world ? 'contact' : 'flight';
   }
+  /** Fuel left in one part's tank. */
+  partFuelKg(which: RocketPart): number { return this.parts[which].fuelKg; }
+  /**
+   * Δv left in one part's tank, in vacuum (Tsiolkovsky), m/s. The booster pushes the upper stage too
+   * while they are joined; the upper stage fires only after separation, so it pushes itself alone.
+   */
+  partDeltaV(which: RocketPart): number {
+    const slot = this.parts[which];
+    const startMass = which === 'booster' && !this.separated ? this.massKg : this.partMass(which);
+    return slot.spec.specificImpulseSeconds * STANDARD_GRAVITY * Math.log(startMass / (startMass - slot.fuelKg));
+  }
   /** Contact worlds in use (one while the parts are together, up to one per part otherwise). */
   contactWorlds(): ContactWorld[] {
     return [...new Set(PARTS.map((which) => this.parts[which].world).filter((w): w is ContactWorld => w !== null))];

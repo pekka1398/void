@@ -26,7 +26,7 @@ const vesselAt = (altitude: number): FocusGeometry => ({ kind: 'vessel', radial,
   let previous = viewState('single', false, vesselAt(0), camera.distance);
   check(previous.mapWeight === 0 && previous.corotation === 1, `landed close-up should be flight view co-rotating; ${JSON.stringify(previous)}`);
   check(angle(previous.up, radial) < 1e-12, 'landed close-up up should be the local vertical');
-  let worstUpStep = 0, worstDirectionStep = 0;
+  let worstUpStep = 0, worstDirectionStep = 0, mapWhileUpright = false, upWhileMapIn = false;
   camera.clampToUp(previous.up);
   while (camera.distance < 1e11) {
     const before = camera.direction;
@@ -36,10 +36,16 @@ const vesselAt = (altitude: number): FocusGeometry => ({ kind: 'vessel', radial,
     worstUpStep = Math.max(worstUpStep, angle(previous.up, next.up));
     worstDirectionStep = Math.max(worstDirectionStep, angle(before, camera.direction));
     check(next.mapWeight >= previous.mapWeight, `map weight fell while zooming out at ${camera.distance}`);
+    check(next.upWeight >= previous.upWeight, `up weight fell while zooming out at ${camera.distance}`);
+    // The map comes in first; the up does not start turning (nor the ground's spin let go) before it is fully in.
+    check(next.upWeight === 0 || next.mapWeight === 1, `up turning before the map is in at ${camera.distance}: ${JSON.stringify(next)}`);
+    if (next.mapWeight > 0 && next.mapWeight < 1) mapWhileUpright = true;
+    if (next.upWeight > 0 && next.upWeight < 1) upWhileMapIn = true;
     check(next.corotation <= previous.corotation, `co-rotation rose while zooming out at ${camera.distance}`);
     previous = next;
   }
-  check(previous.mapWeight === 1 && previous.corotation === 0, `far out should be the map, inertial; ${JSON.stringify(previous)}`);
+  check(previous.mapWeight === 1 && previous.upWeight === 1 && previous.corotation === 0, `far out should be the map, inertial; ${JSON.stringify(previous)}`);
+  check(mapWhileUpright && upWhileMapIn, 'both the map fade and the up turn should have been passed through');
   check(angle(previous.up, north) < 1e-12, 'far out up should be north');
   check(worstUpStep < 0.5 * DEG, `up turned ${(worstUpStep / DEG).toFixed(3)} deg in one 1% zoom step`);
   check(worstDirectionStep < 0.5 * DEG, `view direction turned ${(worstDirectionStep / DEG).toFixed(3)} deg in one 1% zoom step`);

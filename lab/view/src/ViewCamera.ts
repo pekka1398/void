@@ -8,8 +8,15 @@ import { cross, dot, length, normalize, type Vec3 } from '../../orbit/src/orbit/
  */
 export type ViewMode = 'single' | 'split';
 
-/** Map elements fade in between these zoom scales, in radii of the reference body (log-distance smoothstep). */
-export const MAP_FADE_RADII = [0.02, 0.2] as const;
+/** Map elements fade in between these zoom scales, in radii of the reference body (log-distance smoothstep): 4–40 km on Aurelia,
+ * starting where the rocket shrinks to about a pixel. */
+export const MAP_FADE_RADII = [0.00063, 0.0063] as const;
+/**
+ * Then, once the map is fully in, the camera's up turns from the local vertical to the body's north
+ * between these zoom scales (log-distance smoothstep), and the camera stops following the ground's spin.
+ * One decade: 400–4,000 km on Aurelia.
+ */
+export const UP_TURN_RADII = [0.063, 0.63] as const;
 /**
  * The camera co-rotates with the surface below the first focus altitude and
  * is inertial above the second, in radii of the reference body (KSP's flight
@@ -37,16 +44,25 @@ export function smoothstep(edge0: number, edge1: number, x: number): number {
  * surface of a focused body.
  */
 export function mapWeightFor(zoomScale: number, referenceRadius: number): number {
-  if (!(referenceRadius > 0)) throw new RangeError(`mapWeightFor: radius ${referenceRadius}`);
-  if (zoomScale <= 0) return 0;
-  return smoothstep(Math.log(MAP_FADE_RADII[0] * referenceRadius), Math.log(MAP_FADE_RADII[1] * referenceRadius), Math.log(zoomScale));
+  return zoomWeight(MAP_FADE_RADII, zoomScale, referenceRadius);
 }
 
-/** Fraction of the reference body's spin the camera direction follows, 0..1. */
-export function corotationWeight(mapWeight: number, focusAltitude: number, referenceRadius: number): number {
-  if (!(mapWeight >= 0 && mapWeight <= 1)) throw new RangeError(`corotationWeight: map weight ${mapWeight}`);
+/** How far the camera's up has turned from the local vertical to north in single mode, 0..1. */
+export function upWeightFor(zoomScale: number, referenceRadius: number): number {
+  return zoomWeight(UP_TURN_RADII, zoomScale, referenceRadius);
+}
+
+function zoomWeight(radii: readonly [number, number], zoomScale: number, referenceRadius: number): number {
+  if (!(referenceRadius > 0)) throw new RangeError(`zoomWeight: radius ${referenceRadius}`);
+  if (zoomScale <= 0) return 0;
+  return smoothstep(Math.log(radii[0] * referenceRadius), Math.log(radii[1] * referenceRadius), Math.log(zoomScale));
+}
+
+/** Fraction of the reference body's spin the camera direction follows, 0..1; it ends as the up turns to north. */
+export function corotationWeight(upWeight: number, focusAltitude: number, referenceRadius: number): number {
+  if (!(upWeight >= 0 && upWeight <= 1)) throw new RangeError(`corotationWeight: up weight ${upWeight}`);
   const high = smoothstep(SURFACE_LOCK_RADII[0] * referenceRadius, SURFACE_LOCK_RADII[1] * referenceRadius, focusAltitude);
-  return (1 - mapWeight) * (1 - high);
+  return (1 - upWeight) * (1 - high);
 }
 
 /** Rodrigues rotation of v about a unit axis. */
@@ -152,6 +168,8 @@ export interface FocusGeometry {
 export interface ViewState {
   /** 0 = flight view, 1 = map: orbit lines and labels are drawn at this opacity. */
   mapWeight: number;
+  /** 0 = up is the local vertical, 1 = the body's north. Single mode: rises only after the map is fully in. */
+  upWeight: number;
   /** Fraction of the reference body's spin the camera follows. */
   corotation: number;
   /** Camera up (unit): local vertical in flight, the body's north on the map. */
@@ -169,23 +187,26 @@ export function viewState(mode: ViewMode, mapOn: boolean, focus: FocusGeometry, 
     throw new Error(`viewState: inconsistent ${focus.kind} focus ${JSON.stringify(focus)}`);
   }
   const nearest = focus.kind === 'vessel' ? VESSEL_MIN_DISTANCE : focus.focusRadius * BODY_MIN_RADII;
-  let minDistance: number, maxDistance: number, mapWeight: number;
+  let minDistance: number, maxDistance: number, mapWeight: number, upWeight: number;
   if (mode === 'single') {
     if (mapOn) throw new Error('viewState: single mode has no map switch');
     minDistance = nearest;
     maxDistance = MAX_DISTANCE;
     const clamped = Math.max(minDistance, Math.min(maxDistance, distance));
     mapWeight = mapWeightFor(clamped - focus.focusRadius, focus.referenceRadius);
+    upWeight = upWeightFor(clamped - focus.focusRadius, focus.referenceRadius);
   } else if (mapOn) {
     minDistance = Math.max(nearest, focus.focusRadius + MAP_MIN_DISTANCE);
     maxDistance = MAX_DISTANCE;
     mapWeight = 1;
+    upWeight = 1;
   } else {
     if (focus.kind !== 'vessel') throw new Error('viewState: the split flight view looks only at the vessel');
     minDistance = nearest;
     maxDistance = FLIGHT_MAX_DISTANCE;
     mapWeight = 0;
+    upWeight = 0;
   }
-  const up = focus.radial ? slerpUnit(focus.radial, focus.north, mapWeight) : focus.north;
-  return { mapWeight, corotation: corotationWeight(mapWeight, focus.altitude, focus.referenceRadius), up, minDistance, maxDistance };
+  const up = focus.radial ? slerpUnit(focus.radial, focus.north, upWeight) : focus.north;
+  return { mapWeight, upWeight, corotation: corotationWeight(upWeight, focus.altitude, focus.referenceRadius), up, minDistance, maxDistance };
 }

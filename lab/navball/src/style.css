@@ -1,0 +1,18 @@
+html, body { margin: 0; height: 100%; background: #03040a; color: #cfd6e4; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+#app { position: fixed; inset: 0 0 0 380px; display: flex; align-items: center; justify-content: center; gap: 48px; }
+figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.caption { color: #8892a6; }
+.panel {
+  position: fixed; top: 12px; left: 12px; width: 340px; padding: 10px 12px;
+  background: rgba(8, 10, 16, 0.88); border: 1px solid #2a3040; border-radius: 6px;
+}
+.panel .title { font-weight: 700; letter-spacing: 0.12em; color: #fff; margin-bottom: 6px; }
+.panel label { display: grid; grid-template-columns: 130px 1fr 52px; align-items: center; gap: 6px; margin: 3px 0; }
+.panel output { text-align: right; color: #fff; }
+.panel pre { margin: 8px 0; color: #e6ecf6; }
+.panel .help { color: #8892a6; }
+kbd { padding: 0 4px; border: 1px solid #3a4256; border-radius: 3px; color: #9fb0d0; font-size: 11px; }
+.panic {
+  position: fixed; inset: 12px; z-index: 9999; overflow: auto; margin: 0; padding: 20px;
+  background: #260d14; color: #ffe0e5; white-space: pre-wrap; font: 12px/1.4 ui-monospace, monospace;
+}

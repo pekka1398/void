@@ -6,7 +6,8 @@ import {
   type CoastPrediction, type LanderControl, type RocketPart,
 } from './landingCore';
 import { MapLayer, OrbitCamera, toThree, viewState, type Focus, type FocusGeometry, type ViewState } from './viewCore';
-import { bodyFixedToRender, quatMultiply } from './FlightFrame';
+import { bodyFixedToRender, quatMultiply, vesselAxes } from './FlightFrame';
+import { NavballWidget } from './navballCore';
 import './style.css';
 
 const PARTS: readonly RocketPart[] = ['upper', 'booster'];
@@ -60,30 +61,96 @@ let prediction: CoastPrediction | null = null;
 let predictionAt = -Infinity;
 let predictionGeneration = 0;
 
-const panel = document.createElement('aside');
-panel.className = 'panel';
-panel.innerHTML = `<div class="title">FLIGHT LAB <small>landing + orbit + single view</small></div>
-<div class="help" id="badge"></div>
-<label>Planet<select id="planet">${Object.keys(PLANETS).map((id) => `<option value="${id}">${id}</option>`).join('')}</select></label>
-<label>Time rate<select id="rate"><option value="1">1×</option><option value="5">5×</option><option value="20">20×</option></select></label>
-<label class="check"><input id="terrain-visible" type="checkbox" checked> Draw terrain (profiling)</label>
-<label class="check"><input id="wire" type="checkbox"> Mesh edges (white)</label>
-<label class="check"><input id="bounds" type="checkbox"> Tile boundaries (red)</label>
-<label class="check"><input id="colliders" type="checkbox"> Colliders: terrain and rocket (green)</label>
-<pre class="status" id="status"></pre><pre id="readout"></pre>
-<div class="help"><kbd>Space</kbd> ignite booster, then separate and ignite the upper stage · <kbd>Shift</kbd>/<kbd>Ctrl</kbd> throttle · <kbd>X</kbd> cut<br>
-<kbd>W</kbd>/<kbd>S</kbd> pitch · <kbd>A</kbd>/<kbd>D</kbd> yaw · <kbd>Q</kbd>/<kbd>E</kbd> roll · <kbd>P</kbd> pause · <kbd>R</kbd> reset<br>
-Drag: orbit camera · wheel: zoom out into the map · <kbd>Tab</kbd> or a label: focus</div>`;
-document.body.append(panel);
-const planetInput = panel.querySelector<HTMLSelectElement>('#planet')!;
-const rateInput = panel.querySelector<HTMLSelectElement>('#rate')!;
-const terrainVisibleInput = panel.querySelector<HTMLInputElement>('#terrain-visible')!;
-const wireInput = panel.querySelector<HTMLInputElement>('#wire')!;
-const boundsInput = panel.querySelector<HTMLInputElement>('#bounds')!;
-const collidersInput = panel.querySelector<HTMLInputElement>('#colliders')!;
-const statusText = panel.querySelector<HTMLElement>('#status')!;
-const readoutText = panel.querySelector<HTMLElement>('#readout')!;
-panel.querySelector<HTMLElement>('#badge')!.textContent = planet.label;
+const TIME_RATES = [1, 5, 20] as const;
+let timeRate: number = TIME_RATES[0];
+let altitudeMode: 'agl' | 'alt' = 'agl';
+let speedMode: 'surface' | 'orbit' = 'surface';
+
+// KSP-style HUD: clock top left, stages bottom left, throttle, altitude and speed, and the navball bottom
+// centre, the orbit on the right while the map is in, the dev panel top right and the keys bottom right.
+// Clickable parts are spans, not buttons, so they never take the keyboard focus from Space.
+const hud = document.createElement('div');
+hud.className = 'hud';
+hud.innerHTML = `<div class="box clock"><span id="met"></span><span class="warp">${TIME_RATES.map((r) => `<span class="click" data-rate="${r}">${r}×</span>`).join('')}</span><span class="paused" id="paused">PAUSED</span></div>
+<div class="box stages"><div class="caption" id="stage-head"></div>${PARTS.map((which) => `<div class="stage" id="stage-${which}"><span class="name"></span><span class="bar"><i></i></span><span class="fuel"></span><span class="dv"></span></div>`).join('')}<div class="hint" id="stage-hint"></div></div>
+<div class="flight">
+  <div class="box throttle"><span class="caption">THR</span><span class="bar"><i id="throttle-fill"></i></span><span id="throttle"></span></div>
+  <div class="box speed"><span class="click caption" id="alt-mode"></span><b class="altitude" id="alt"></b><hr><span class="click caption" id="speed-mode"></span><b id="speed"></b><span class="sub" id="speed-reference"></span></div>
+  <div class="box navball" id="navball"><span class="caption" id="heading"></span></div>
+</div>
+<div class="box orbit" id="orbit"><div class="caption" id="orbit-head"></div><pre id="orbit-text"></pre></div>
+<aside class="box dev collapsed" id="dev">
+  <div class="click caption" id="dev-head">DEV <kbd>\`</kbd></div>
+  <div class="dev-body">
+    <div class="title">FLIGHT LAB <small>landing + orbit + single view</small></div>
+    <div class="sub" id="badge"></div>
+    <label>Planet<select id="planet">${Object.keys(PLANETS).map((id) => `<option value="${id}">${id}</option>`).join('')}</select></label>
+    <label class="check"><input id="terrain-visible" type="checkbox" checked> Draw terrain (profiling)</label>
+    <label class="check"><input id="wire" type="checkbox"> Mesh edges (white)</label>
+    <label class="check"><input id="bounds" type="checkbox"> Tile boundaries (red)</label>
+    <label class="check"><input id="colliders" type="checkbox"> Colliders: terrain and rocket (green)</label>
+    <pre id="debug"></pre>
+  </div>
+</aside>
+<div class="box help" id="help" hidden><kbd>Space</kbd> ignite booster, then separate and ignite the upper stage<br>
+<kbd>Shift</kbd>/<kbd>Ctrl</kbd> throttle · <kbd>X</kbd> cut<br>
+<kbd>W</kbd>/<kbd>S</kbd> pitch · <kbd>A</kbd>/<kbd>D</kbd> yaw · <kbd>Q</kbd>/<kbd>E</kbd> roll<br>
+<kbd>,</kbd>/<kbd>.</kbd> time rate · <kbd>P</kbd> pause · <kbd>R</kbd> reset<br>
+Drag: orbit camera · wheel: zoom out into the map<br>
+<kbd>Tab</kbd> or a label: focus · <kbd>\`</kbd> dev panel · <kbd>F1</kbd> keys<br>
+Click ALT/AGL and SURFACE/ORBIT to switch them</div>
+<span class="box click help-button" id="help-button"><kbd>F1</kbd> keys</span>`;
+document.body.append(hud);
+const element = <T extends HTMLElement>(selector: string): T => {
+  const found = hud.querySelector<T>(selector);
+  if (!found) throw new Error(`flight lab: HUD element ${selector} missing`);
+  return found;
+};
+const planetInput = element<HTMLSelectElement>('#planet');
+const terrainVisibleInput = element<HTMLInputElement>('#terrain-visible');
+const wireInput = element<HTMLInputElement>('#wire');
+const boundsInput = element<HTMLInputElement>('#bounds');
+const collidersInput = element<HTMLInputElement>('#colliders');
+const devPanel = element('#dev');
+const helpCard = element('#help');
+const hudText = {
+  met: element('#met'), paused: element('#paused'), altMode: element('#alt-mode'), alt: element('#alt'),
+  stageHead: element('#stage-head'), stageHint: element('#stage-hint'),
+  throttleFill: element('#throttle-fill'), throttle: element('#throttle'),
+  speedMode: element('#speed-mode'), speed: element('#speed'), speedReference: element('#speed-reference'),
+  heading: element('#heading'), orbit: element('#orbit'), orbitHead: element('#orbit-head'), orbitText: element('#orbit-text'), debug: element('#debug'),
+};
+const stageRows = Object.fromEntries(PARTS.map((which) => {
+  const row = element(`#stage-${which}`);
+  const part = (selector: string) => {
+    const found = row.querySelector<HTMLElement>(selector);
+    if (!found) throw new Error(`flight lab: stage row ${which} ${selector} missing`);
+    return found;
+  };
+  return [which, { row, name: part('.name'), fill: part('.bar i'), fuel: part('.fuel'), deltaV: part('.dv') }];
+})) as Record<RocketPart, { row: HTMLElement; name: HTMLElement; fill: HTMLElement; fuel: HTMLElement; deltaV: HTMLElement }>;
+const warpButtons = [...hud.querySelectorAll<HTMLElement>('[data-rate]')];
+function setTimeRate(rate: number): void {
+  timeRate = rate;
+  for (const button of warpButtons) button.classList.toggle('on', Number(button.dataset.rate) === rate);
+}
+setTimeRate(timeRate);
+for (const button of warpButtons) button.addEventListener('click', () => setTimeRate(Number(button.dataset.rate)));
+function stepTimeRate(step: number): void {
+  const index = TIME_RATES.indexOf(timeRate as typeof TIME_RATES[number]);
+  if (index < 0) throw new Error(`flight lab: time rate ${timeRate} is not one of ${TIME_RATES.join(', ')}`);
+  setTimeRate(TIME_RATES[Math.max(0, Math.min(TIME_RATES.length - 1, index + step))]!);
+}
+hudText.altMode.addEventListener('click', () => { altitudeMode = altitudeMode === 'agl' ? 'alt' : 'agl'; });
+hudText.speedMode.addEventListener('click', () => { speedMode = speedMode === 'surface' ? 'orbit' : 'surface'; });
+const toggleDev = () => devPanel.classList.toggle('collapsed');
+const toggleHelp = () => { helpCard.hidden = !helpCard.hidden; };
+element('#dev-head').addEventListener('click', toggleDev);
+element('#help-button').addEventListener('click', toggleHelp);
+element('#badge').textContent = planet.label;
+// lab/navball's ball, drawn every frame in the ecliptic frame; its markers follow SURFACE/ORBIT.
+const navball = new NavballWidget(150, Math.min(window.devicePixelRatio, 2));
+element('#navball').prepend(navball.canvas);
 planetInput.value = planetId;
 planetInput.addEventListener('change', () => {
   const next = new URL(window.location.href);
@@ -179,13 +246,17 @@ function reset(): void {
 const keys = new Set<string>();
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
-  if (['Space', 'Tab', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'KeyW', 'KeyS', 'KeyA', 'KeyD', 'KeyQ', 'KeyE'].includes(e.code)) e.preventDefault();
+  if (['Space', 'Tab', 'F1', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'KeyW', 'KeyS', 'KeyA', 'KeyD', 'KeyQ', 'KeyE'].includes(e.code)) e.preventDefault();
   keys.add(e.code);
   if (e.repeat) return;
   if (e.code === 'Space') stage();
   else if (e.code === 'KeyX') throttlePercent = 0;
   else if (e.code === 'KeyP') paused = !paused;
   else if (e.code === 'KeyR') reset();
+  else if (e.code === 'Comma') stepTimeRate(-1);
+  else if (e.code === 'Period') stepTimeRate(1);
+  else if (e.code === 'Backquote') toggleDev();
+  else if (e.code === 'F1') toggleHelp();
   else if (e.code === 'Tab') {
     const order: Focus[] = [{ kind: 'vessel' }, ...bodies.map((b): Focus => ({ kind: 'body', index: b.index }))];
     const current = order.findIndex((f) => f.kind === focus.kind && (f.kind === 'vessel' || (focus.kind === 'body' && f.index === focus.index)));
@@ -280,7 +351,7 @@ function frameLoop(nowMs: number): void {
     const before = lander.time;
     if (!paused) {
       const physicsStarted = performance.now();
-      lander.advance(wall * Number(rateInput.value), command());
+      lander.advance(wall * timeRate, command());
       timePhase('physics', performance.now() - physicsStarted);
     }
     // A booster lost while attached leaves the upper stage flying on its own.
@@ -348,6 +419,16 @@ function frameLoop(nowMs: number): void {
       path: prediction ? { trajectory: prediction.trajectory, generation: predictionGeneration, reference: navigation } : null,
       mapWeight: state.mapWeight, focus, camera, width: window.innerWidth, height: window.innerHeight });
 
+    // The ball's horizon is the dominant body's; body-fixed vectors are turned into the ecliptic frame.
+    const toEcliptic = (v: Vec3): Vec3 => ({ x: axes.x.x * v.x + axes.y.x * v.y + axes.z.x * v.z,
+      y: axes.x.y * v.x + axes.y.y * v.y + axes.z.y * v.z, z: axes.x.z * v.x + axes.y.z * v.y + axes.z.z * v.z });
+    const vessel = vesselAxes(lander.partOrientation('upper'));
+    const reading = navball.draw({ nose: toEcliptic(vessel.nose), top: toEcliptic(vessel.top),
+      up: normalize(sub(upper.position, bodyPosition(navigation))), pole: spinAxis(bodies[navigation]!),
+      primeMeridian: bodyOrientation(bodies[navigation]!, t).x,
+      velocity: speedMode === 'surface' ? toEcliptic(lander.bodyFixedState().velocity) : sub(upper.velocity, bodyVelocity(navigation)) });
+    hudText.heading.textContent = `HDG ${String(Math.round(reading.heading) % 360).padStart(3, '0')}° · ${reading.pitch >= 0 ? '+' : ''}${reading.pitch.toFixed(0)}°`;
+
     const drawStarted = performance.now();
     renderer.render(scene, camera);
     timePhase('draw', performance.now() - drawStarted);
@@ -395,20 +476,64 @@ function updateText(upper: { position: Vec3; velocity: Vec3 }, navigation: numbe
   const r = sub(upper.position, bodyPosition(navigation));
   const v = sub(upper.velocity, bodyVelocity(navigation));
   const osc = osculatingOrbit(r, v, body.gm);
-  const stageText = stageNumber === 0 ? 'ready · booster' : stageNumber === 1 ? 'booster' : 'upper stage';
-  statusText.textContent = `T+ ${lander.time.toFixed(1)} s   ${rateInput.value}×${paused ? '  PAUSED' : ''}\n${stageText} · ${lander.mode}${lander.partMode('booster') === 'destroyed' ? ' · booster lost' : ''}`;
-  readoutText.textContent = [
-    `throttle   ${throttlePercent.toFixed(0)}%${engineArmed ? (throttlePercent > 0 && lander.fuelKg > 0 ? ' firing' : ' staged') : ' unlit'} · fuel ${lander.fuelKg.toFixed(0)} kg`,
-    `height AGL ${formatDistance(Math.max(0, lander.clearance() - lander.spec.halfExtents.y))}`,
-    `ground spd ${Math.hypot(ground.x, ground.y, ground.z).toFixed(1)} m/s`,
-    `orbit spd  ${Math.hypot(v.x, v.y, v.z).toFixed(1)} m/s about ${body.name}`,
-    `Pe / Ap    ${formatDistance(osc.periapsisRadiusMeters - body.radiusMeters)} / ${Number.isFinite(osc.apoapsisRadiusMeters) ? formatDistance(osc.apoapsisRadiusMeters - body.radiusMeters) : 'escape'}`,
-    `impact     ${prediction?.impact ? `in ${Math.max(0, prediction.impact.time - lander.time).toFixed(0)} s` : '—'}`,
-    '',
-    `focus      ${focusName(focus)}${focus.kind === 'vessel' ? ` (reference ${reference.name})` : ''}`,
-    `camera     ${formatDistance(orbitCamera.distance)} · map ${(state.mapWeight * 100).toFixed(0)}% · co-rotate ${(state.corotation * 100).toFixed(0)}%`,
-    `tiles      ${tiles} drawn, ${terrainView.queuedBuilds} building`,
+
+  hudText.met.textContent = formatMissionTime(lander.time);
+  hudText.paused.hidden = !paused;
+
+  hudText.altMode.textContent = altitudeMode === 'agl' ? 'AGL' : 'ALT';
+  hudText.alt.textContent = formatDistance(altitudeMode === 'agl'
+    ? Math.max(0, lander.clearance() - lander.spec.halfExtents.y)
+    : Math.hypot(r.x, r.y, r.z) - body.radiusMeters);
+
+  hudText.stageHead.textContent = `STAGES · ${lander.mode}`;
+  for (const which of PARTS) {
+    const { row, name, fill, fuel, deltaV } = stageRows[which];
+    const capacity = (which === 'upper' ? rocket.upper : rocket.booster).fuelMassKg;
+    const left = lander.partFuelKg(which);
+    // The booster fires first (stage 1), the upper stage after separation (stage 2).
+    const order = which === 'booster' ? 1 : 2;
+    const status = lander.partMode(which) === 'destroyed' ? 'lost'
+      : stageNumber > order ? 'separated' : stageNumber === order ? 'active' : stageNumber === order - 1 ? 'next' : 'waiting';
+    row.className = `stage ${status}`;
+    name.textContent = `${which === 'booster' ? 'booster' : 'upper stage'}${status === 'active' || status === 'waiting' ? '' : ` · ${status}`}`;
+    fill.style.width = `${(100 * left / capacity).toFixed(1)}%`;
+    fuel.textContent = `${left.toFixed(0)} kg`;
+    deltaV.textContent = `Δv ${lander.partDeltaV(which).toFixed(0)} m/s`;
+  }
+  hudText.stageHint.textContent = stageNumber === 0 ? 'Space: ignite booster' : stageNumber === 1 ? 'Space: separate, ignite upper stage' : '';
+
+  const engine = engineArmed ? (throttlePercent > 0 && lander.fuelKg > 0 ? 'firing' : 'staged') : 'unlit';
+  hudText.throttleFill.style.height = `${throttlePercent.toFixed(1)}%`;
+  hudText.throttleFill.parentElement!.classList.toggle('firing', engine === 'firing');
+  hudText.throttle.textContent = `${throttlePercent.toFixed(0)}%\n${engine}`;
+
+  const speed = speedMode === 'surface' ? ground : v;
+  hudText.speedMode.textContent = speedMode === 'surface' ? 'SURFACE' : 'ORBIT';
+  hudText.speed.textContent = `${Math.hypot(speed.x, speed.y, speed.z).toFixed(1)} m/s`;
+  hudText.speedReference.textContent = speedMode === 'surface' ? `over ${home.name}` : `about ${body.name}`;
+
+  // Pe/Ap and the impact belong to the map: they fade in with it.
+  hudText.orbit.hidden = state.mapWeight <= 0;
+  hudText.orbit.style.opacity = state.mapWeight.toFixed(3);
+  hudText.orbitHead.textContent = `ORBIT · ${body.name}`;
+  hudText.orbitText.textContent = [
+    `Ap     ${Number.isFinite(osc.apoapsisRadiusMeters) ? formatDistance(osc.apoapsisRadiusMeters - body.radiusMeters) : 'escape'}`,
+    `Pe     ${formatDistance(osc.periapsisRadiusMeters - body.radiusMeters)}`,
+    `impact ${prediction?.impact ? `in ${Math.max(0, prediction.impact.time - lander.time).toFixed(0)} s` : '—'}`,
   ].join('\n');
+
+  hudText.debug.textContent = [
+    `focus   ${focusName(focus)}${focus.kind === 'vessel' ? ` (reference ${reference.name})` : ''}`,
+    `camera  ${formatDistance(orbitCamera.distance)} · map ${(state.mapWeight * 100).toFixed(0)}% · up ${(state.upWeight * 100).toFixed(0)}% · co-rotate ${(state.corotation * 100).toFixed(0)}%`,
+    `tiles   ${tiles} selected, ${terrainView.queuedBuilds} building`,
+  ].join('\n');
+}
+
+function formatMissionTime(seconds: number): string {
+  const whole = Math.floor(seconds);
+  const days = Math.floor(whole / 86400);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `T+ ${days > 0 ? `${days}d ` : ''}${pad(Math.floor(whole % 86400 / 3600))}:${pad(Math.floor(whole % 3600 / 60))}:${pad(whole % 60)}`;
 }
 
 void renderer.init().then(() => {

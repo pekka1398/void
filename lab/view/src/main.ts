@@ -315,7 +315,7 @@ function frameLoop(nowMs: number): void {
       lastSample = nowMs;
       const phase = (p: { sum: number; max: number }) => ({ mean: timings.frames > 0 ? p.sum / timings.frames : null, max: p.max });
       log.write({ event: 'view-sample', simTime: t, warp: WARPS[warpIndex], mapOn, focus: focusName(focus), distance: orbitCamera.distance,
-        mapWeight: state.mapWeight, corotation: state.corotation, vesselAltitude: geometry.kind === 'vessel' ? geometry.altitude : null,
+        mapWeight: state.mapWeight, upWeight: state.upWeight, corotation: state.corotation, vesselAltitude: geometry.kind === 'vessel' ? geometry.altitude : null,
         tiles: selection.render.length, culled: selection.culled.horizon, requests: selection.requests.length, queued: terrainView.queuedBuilds,
         perf: { frames: timings.frames, frameMs: phase(timings.frame), lodMs: phase(timings.lod), drawMs: phase(timings.draw) } });
       timings.frames = 0;
@@ -349,6 +349,7 @@ function updateText(geometry: FocusGeometry, reference: CelestialBody, navigatio
     `focus      ${focusName(focus)}${geometry.kind === 'vessel' ? ` (reference ${reference.name})` : ''}`,
     `distance   ${formatDistance(orbitCamera.distance)}  [${formatDistance(state.minDistance)} .. ${formatDistance(state.maxDistance)}]`,
     `map        ${(state.mapWeight * 100).toFixed(0)}%`,
+    `up         ${(state.upWeight * 100).toFixed(0)}% toward north`,
     `co-rotate  ${(state.corotation * 100).toFixed(0)}% of ${reference.name}'s spin`,
     '',
     `vessel     about ${vesselRef.name}`,

@@ -55,3 +55,13 @@ export function quatRotate(q: Quat, v: Vec3): Vec3 {
     z: v.z + q.w * tz + (q.x * ty - q.y * tx),
   };
 }
+
+/**
+ * The navball's vessel axes from the upper stage's attitude: the nose is its
+ * local +y (thrust axis) and the top its local +z, where `S` (a positive
+ * torque about local +x) pitches the nose. Screen right is then local -x,
+ * where `D` (about local +z) yaws it.
+ */
+export function vesselAxes(attitude: Quat): { nose: Vec3; top: Vec3 } {
+  return { nose: quatRotate(attitude, { x: 0, y: 1, z: 0 }), top: quatRotate(attitude, { x: 0, y: 0, z: 1 }) };
+}
