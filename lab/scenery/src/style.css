@@ -10,7 +10,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
 .panel label { display: block; margin: 4px 0; }
 .panel input[type=range] { width: 100%; }
 .panel select { background: #0d1522; color: #cfe3f5; border: 1px solid #34506b; }
-.panel .toggles { display: flex; gap: 10px; margin: 6px 0; }
+.panel .toggles { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 6px 0; }
 .panel .toggles label { display: inline; }
 .panel .presets { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
 .panel .presets span { padding: 2px 7px; border: 1px solid #34506b; border-radius: 3px; cursor: pointer; }

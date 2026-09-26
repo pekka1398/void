@@ -17,7 +17,7 @@ npm run typecheck
   - Orbiting slows the same way, at most lab/lod's 0.005 rad per pixel.
   - The view can tilt past the horizon to nearly straight up. The camera never goes below 1.5 m.
 - **Time.** *Local time* is the solar time where the camera stands. *Time rate* runs it. *Sun declination* sets the season.
-- **Toggles.** *Sea level*, *exposure* and *tone mapping* can be changed live, and the atmosphere, ocean and stars can each be switched off.
+- **Toggles.** *Sea level*, *exposure* and *tone mapping* can be changed live, and the atmosphere, its multiple scattering, the ocean and the stars can each be switched off.
 - **Terrain.** Three choices; changing it reloads the page. `?terrain=layered` (default) is this lab's own planet (below). `?terrain=lod` is lab/lod's continents. `?terrain=hills` is lab/landing's Aurelia hills, which lab/flight uses.
 - **Start point.** `?at=latitude,longitude` (degrees) sets the spot the camera starts over, for example `?at=22.5,-142`, the layered planet's highest range.
 - **Presets.** Over the current spot, these jump to a height, pitch and time: ground at 10:00, sunset toward the west, night, 10 km, 400 km, and 20,000 km looking straight down.
@@ -43,7 +43,15 @@ Render space is the planet's body-fixed axes with the camera at the origin. The 
 - **Transmittance table.** It is 256×64 and built on the CPU at start-up. It uses Hillaire's layout and is uploaded as half floats, so linear filtering works on any WebGL2 device.
   - Sunlight below the ground sphere's horizon is cut off, softened over the sun's radius; this gives the Earth's shadow at dusk.
 - **Precision.** The camera's height reaches the shader from the CPU in float64. The ray–sphere tests use `altitude · (2R + altitude)` instead of subtracting two 6,371 km squares in float32.
-- **Not modelled yet.** There is no multiple scattering, so twilight and the deep sky are darker than they should be. There are no clouds.
+- **Multiple scattering** (`src/SkyTables.ts`). This follows Hillaire's 32×32 table Ψ(height, sun angle). Built from the transmittance table, it holds:
+  - second-order light from 64 directions, including a bounce off 30%-albedo ground;
+  - the share of light the air re-scatters, f;
+  - Ψ = L₂ / (1 − f), which sums all orders.
+
+  The sky pass adds `σ_s · Ψ` as an isotropic source at every step. It brightens the noon zenith by about 60% (blue) and the twilight sky 2.4×.
+- **Sky irradiance.** A 32×16 table of the light the whole sky (multiple scattering included, without the sun's beam) casts on level ground. It is integrated over 64 hemisphere directions and is within 2% of 512.
+- **Start-up cost.** All three tables are built on the CPU at start-up, in about 0.6 s in the browser. The page shows the time.
+- **Not modelled yet.** There are no clouds.
 
 ### Layered terrain (`src/LayeredTerrain.ts`)
 
@@ -75,7 +83,7 @@ A 33×33 tile takes about 3 ms to build in Node.
 ### Ground and sea (`src/GroundMaterial.ts`)
 
 - **Sunlight.** It is `N·L` times the sunlight left after the air (from the table), so the ground reddens at sunset and is black past the terminator.
-- **Sky light.** Added on top is a placeholder: a bluish term that fades through twilight, plus starlight. A proper sky-irradiance table would replace it.
+- **Sky light.** It comes from the sky-irradiance table at the point's height and sun angle. A tilted surface gets (1 + N·up)/2 of it. A night floor of 2×10⁻⁴ of sunlight stands in for starlight and airglow, about a hundred times too bright, so the night side is dim rather than black.
 - **Land colour.** It starts from the tile's vertex colour (the layered planet's ground cover). The shader adds sand within about 10 m of the sea, and bare rock on steep ground and above the terrain's rock height; the higher the ground, the gentler the slope that turns to rock.
 - **Snow.** It lies on flat ground above a snow line that falls toward the poles, to 30% of its height above the sea there.
 - **Sub-mesh detail.** Value noise from 256 m down to 1 m mottles the land. It repeats every 4096 m on each axis, like the waves, so it has no seam. Each octave fades out where it is under a pixel. The terrain's vertex colour is not used.
@@ -83,7 +91,7 @@ A 33×33 tile takes about 3 ms to build in Node.
   - Vertices below sea level are raised onto the sea sphere in the vertex shader. The coast is where the interpolated height crosses sea level.
   - Sea level is a uniform, so the slider needs no rebuild.
   - The sea's colour depends on depth: the bed shows through the first few metres.
-  - It reflects a flat sky colour, weighted by Fresnel.
+  - It reflects the sky's average radiance (irradiance over π), up to twice as bright at grazing angles where the horizon sky shows, weighted by Fresnel.
   - A sun glint is shaped by four deep-water waves. Where the waves are too small to draw (from orbit), the glint becomes a broad, dim lobe, the way sun glitter looks from space.
   - The four waves: Their wave vectors are whole multiples of 2π/4096 m on each axis, so the camera's position is passed modulo 4096 m without a seam. Each wave fades out where it is smaller than a pixel.
 - **Collision.** Rapier's collision ground (lab/landing) is unaffected: the sea is only drawn.
@@ -113,6 +121,11 @@ A 33×33 tile takes about 3 ms to build in Node.
   - It dims monotonically toward the horizon and is red on the horizon.
   - The table coordinates round-trip.
   - The bilinear table lookup matches direct integration within 0.004.
+- **Multiple scattering and sky irradiance.**
+  - The tables are finite and non-negative.
+  - Ψ brightens the noon sky by 10–80%, and more in twilight.
+  - Sky light is 5–25% of daylight at noon, fades monotonically as the sun sets, and is gone at night.
+  - The irradiance table agrees with a 512-direction integral within 5%.
 - **Sky.** A 2,000-step reference gives a blue zenith at noon, a red sky toward the sun at sunset, and darkness overhead at the top of the air.
 - **Shader march.** A CPU port of the shader's 32-step march with table lookups agrees with the reference within 1% on six rays, from the ground, from 10 km and from 99 km.
 - **Stars.** They lie on the sky sphere, and the band is crowded.

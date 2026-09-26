@@ -6,6 +6,9 @@ import {
 import {
   buildTransmittanceTable, TRANSMITTANCE_HEIGHT, TRANSMITTANCE_WIDTH, type AtmosphereParams, type Vec3,
 } from './Atmosphere';
+import {
+  buildIrradianceTable, buildMultipleScatteringTable, IRRADIANCE_HEIGHT, IRRADIANCE_WIDTH, MULTIPLE_SCATTERING_SIZE,
+} from './SkyTables';
 
 type FloatNode = THREE.Node<'float'>;
 type Vec3Node = THREE.Node<'vec3'>;
@@ -33,6 +36,11 @@ const VIEW_STEPS = 32;
  */
 export class AtmosphereShading {
   readonly transmittanceTable: THREE.DataTexture;
+  /** Hillaire's multiple-scattering source Ψ and the sky's irradiance on level ground (src/SkyTables.ts). */
+  readonly multipleScatteringTable: THREE.DataTexture;
+  readonly irradianceTable: THREE.DataTexture;
+  /** CPU time spent building the three tables at start-up, milliseconds. */
+  readonly buildMilliseconds: number;
   /** Unit vector toward the sun, body-fixed. */
   readonly sunDirection = uniform(new THREE.Vector3(1, 0, 0));
   /** Sunlight above the air; the unit every radiance here is measured in. */
@@ -45,6 +53,8 @@ export class AtmosphereShading {
   readonly cameraAltitude = uniform(1);
   /** 0 skips the air: the scene is shown as rendered, with the bare sun disc on the sky. */
   readonly enabled = uniform(1);
+  /** 0 leaves out multiple scattering, for comparison. */
+  readonly multipleEnabled = uniform(1);
   /** Camera matrices for the composite pass, whose own camera is the full-screen quad's. */
   readonly projectionInverse = uniform(new THREE.Matrix4());
   readonly cameraRotation = uniform(new THREE.Matrix4());
@@ -56,17 +66,14 @@ export class AtmosphereShading {
   private readonly horizon: FloatNode;
 
   constructor(readonly params: AtmosphereParams) {
-    const table = buildTransmittanceTable(params);
-    const half = new Uint16Array(table.length);
-    for (let i = 0; i < table.length; i += 1) half[i] = THREE.DataUtils.toHalfFloat(table[i]!);
-    // Half floats filter linearly on every WebGL2 device; float textures need an extension.
-    this.transmittanceTable = new THREE.DataTexture(half, TRANSMITTANCE_WIDTH, TRANSMITTANCE_HEIGHT, THREE.RGBAFormat, THREE.HalfFloatType);
-    this.transmittanceTable.magFilter = THREE.LinearFilter;
-    this.transmittanceTable.minFilter = THREE.LinearFilter;
-    this.transmittanceTable.wrapS = THREE.ClampToEdgeWrapping;
-    this.transmittanceTable.wrapT = THREE.ClampToEdgeWrapping;
-    this.transmittanceTable.colorSpace = THREE.NoColorSpace;
-    this.transmittanceTable.needsUpdate = true;
+    const started = performance.now();
+    const transmittance = buildTransmittanceTable(params);
+    const multiple = buildMultipleScatteringTable(params, transmittance);
+    const irradiance = buildIrradianceTable(params, transmittance, multiple);
+    this.buildMilliseconds = performance.now() - started;
+    this.transmittanceTable = halfFloatTexture(transmittance, TRANSMITTANCE_WIDTH, TRANSMITTANCE_HEIGHT);
+    this.multipleScatteringTable = halfFloatTexture(multiple, MULTIPLE_SCATTERING_SIZE, MULTIPLE_SCATTERING_SIZE);
+    this.irradianceTable = halfFloatTexture(irradiance, IRRADIANCE_WIDTH, IRRADIANCE_HEIGHT);
     this.bottom = float(params.bottomRadius);
     this.top = float(params.topRadius);
     this.horizon = float(Math.sqrt(params.topRadius ** 2 - params.bottomRadius ** 2));
@@ -112,6 +119,24 @@ export class AtmosphereShading {
     const horizonMu = sqrt(max(float(1).sub(this.bottom.mul(this.bottom).div(r2)), 0)).negate();
     const visible = smoothstep(horizonMu.sub(SUN_ANGULAR_RADIUS), horizonMu.add(SUN_ANGULAR_RADIUS), mu);
     return texture(this.transmittanceTable, uv).rgb.mul(visible);
+  }
+
+  /** (height, sun zenith cosine) coordinates of the multiple-scattering and irradiance tables; see SkyTables.ts. */
+  private skyTableUv(r: FloatNode, sunMu: FloatNode, width: number, height: number): THREE.Node<'vec2'> {
+    const depth = this.params.topRadius - this.params.bottomRadius;
+    const x = sunMu.clamp(-1, 1).add(1).mul(0.5);
+    const y = sqrt(r.sub(this.bottom).clamp(0, depth).div(depth));
+    return vec2(x.mul((width - 1) / width).add(0.5 / width), y.mul((height - 1) / height).add(0.5 / height));
+  }
+
+  /** Light scattered twice or more, per unit scattering coefficient and sun illuminance. */
+  multipleScattering(r: FloatNode, sunMu: FloatNode): Vec3Node {
+    return texture(this.multipleScatteringTable, this.skyTableUv(r, sunMu, MULTIPLE_SCATTERING_SIZE, MULTIPLE_SCATTERING_SIZE)).rgb;
+  }
+
+  /** Sky irradiance (without the sun's beam) on level ground at radius r, per unit sun illuminance. */
+  skyIrradiance(r: FloatNode, sunMu: FloatNode): Vec3Node {
+    return texture(this.irradianceTable, this.skyTableUv(r, sunMu, IRRADIANCE_WIDTH, IRRADIANCE_HEIGHT)).rgb;
   }
 
   /** The composite pass: `color` and `depth` are the scene pass's textures (logarithmic depth). */
@@ -168,7 +193,10 @@ export class AtmosphereShading {
             const extinction = rayleighScattering.add(mie.mul(p.mieExtinction)).add(vec3(...p.ozoneAbsorption).mul(ozone));
             const scattering = rayleighScattering.mul(phaseR).add(mie.mul(p.mieScattering).mul(phaseM));
             const sunMu = sunMu0.add(rdSun.mul(t)).div(r);
-            const source = scattering.mul(this.sunTransmittance(r, sunMu)).mul(this.sunIlluminance);
+            const allScattering = rayleighScattering.add(mie.mul(p.mieScattering));
+            const source = scattering.mul(this.sunTransmittance(r, sunMu))
+              .add(allScattering.mul(this.multipleScattering(r, sunMu).mul(this.multipleEnabled)))
+              .mul(this.sunIlluminance);
             const step = exp(extinction.mul(dt).negate());
             // Hillaire's energy-conserving integral of the source over the step.
             inscatter.addAssign(transmittance.mul(source.sub(source.mul(step))).div(extinction));
@@ -188,4 +216,18 @@ export class AtmosphereShading {
     });
     return pass();
   }
+}
+
+function halfFloatTexture(data: Float32Array, width: number, height: number): THREE.DataTexture {
+  const half = new Uint16Array(data.length);
+  for (let i = 0; i < data.length; i += 1) half[i] = THREE.DataUtils.toHalfFloat(data[i]!);
+  // Half floats filter linearly on every WebGL2 device; float textures need an extension.
+  const texture = new THREE.DataTexture(half, width, height, THREE.RGBAFormat, THREE.HalfFloatType);
+  texture.magFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearFilter;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.colorSpace = THREE.NoColorSpace;
+  texture.needsUpdate = true;
+  return texture;
 }

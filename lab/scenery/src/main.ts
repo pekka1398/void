@@ -46,6 +46,7 @@ app.innerHTML = `
     </select></label>
     <div class="toggles">
       <label><input id="air" type="checkbox" checked /> atmosphere</label>
+      <label><input id="multiple" type="checkbox" checked /> multi-scatter</label>
       <label><input id="ocean" type="checkbox" checked /> ocean</label>
       <label><input id="stars" type="checkbox" checked /> stars</label>
     </div>
@@ -131,6 +132,7 @@ seaInput.value = String(terrain.defaultSeaLevel);
 const exposureInput = element<HTMLInputElement>('#exposure');
 const toneInput = element<HTMLSelectElement>('#tone');
 const airInput = element<HTMLInputElement>('#air');
+const multipleInput = element<HTMLInputElement>('#multiple');
 const oceanInput = element<HTMLInputElement>('#ocean');
 const starsInput = element<HTMLInputElement>('#stars');
 const readout = element<HTMLPreElement>('#readout');
@@ -149,6 +151,7 @@ function applySettings(): void {
   groundMaterial.seaLevel.value = Number(seaInput.value);
   groundMaterial.oceanEnabled.value = oceanInput.checked ? 1 : 0;
   atmosphere.enabled.value = airInput.checked ? 1 : 0;
+  atmosphere.multipleEnabled.value = multipleInput.checked ? 1 : 0;
   stars.points.visible = starsInput.checked;
   renderer.toneMappingExposure = 10 ** Number(exposureInput.value);
   const tone = toneInput.value;
@@ -159,7 +162,7 @@ function applySettings(): void {
   element('#sea-value').textContent = `${Number(seaInput.value).toFixed(0)} m`;
   element('#exposure-value').textContent = `×${renderer.toneMappingExposure.toFixed(2)}`;
 }
-for (const input of [declinationInput, seaInput, exposureInput, toneInput, airInput, oceanInput, starsInput]) {
+for (const input of [declinationInput, seaInput, exposureInput, toneInput, airInput, multipleInput, oceanInput, starsInput]) {
   input.addEventListener('input', applySettings);
 }
 applySettings();
@@ -294,6 +297,7 @@ renderer.setAnimationLoop(() => {
     `height ${formatMeters(here.height)} AGL · ${formatMeters(altitude)} ASL`,
     `lat ${(here.latitude / DEG).toFixed(3)}° lon ${(here.longitude / DEG).toFixed(3)}° pitch ${((view.tiltRadians - Math.PI / 2) / DEG).toFixed(0)}°`,
     `sun ${(Math.asin(sunMu) / DEG).toFixed(1)}° above horizon`,
+    `sky tables built in ${atmosphere.buildMilliseconds.toFixed(0)} ms`,
     `tiles ${selection.render.length} drawn · ${ground.queuedBuilds} building · ${fps.toFixed(0)} fps`,
   ].join('\n');
 });

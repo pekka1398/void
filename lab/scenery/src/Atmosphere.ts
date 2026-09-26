@@ -79,7 +79,7 @@ export function rayHitsGround(p: AtmosphereParams, r: number, mu: number): boole
   return mu < 0 && r * r * (mu * mu - 1) + p.bottomRadius * p.bottomRadius >= 0;
 }
 
-const TRANSMITTANCE_STEPS = 400;
+const TRANSMITTANCE_STEPS = 120;
 
 /**
  * Transmittance from radius r along zenith cosine mu to the top of the air,

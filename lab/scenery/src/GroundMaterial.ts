@@ -19,6 +19,8 @@ const WAVES: readonly (readonly [number, number, number, number])[] = [
   [-20, 170, -190, 0.025],
 ];
 const GRAVITY = 9.81;
+/** Irradiance at night, per unit sun illuminance. */
+const NIGHT_LIGHT = 2e-4;
 /** Wavelengths of the ground's sub-mesh detail, metres; each divides WAVE_PERIOD, so the pattern has no seam. */
 const DETAIL_WAVELENGTHS = [256, 64, 16, 4, 1];
 
@@ -80,8 +82,9 @@ export class GroundMaterial {
       const sun = atmosphere.sunDirection;
       const sunMu = dot(up, sun);
       const sunlight = atmosphere.sunTransmittance(r, sunMu).mul(atmosphere.sunIlluminance);
-      // Placeholder sky light until a sky irradiance table: bluish, fading through twilight, plus starlight.
-      const skyLight = vec3(0.1, 0.14, 0.22).mul(smoothstep(-0.2, 0.3, sunMu)).mul(atmosphere.sunIlluminance).add(2e-4);
+      // Sky irradiance on level ground from the table (multiple scattering included), plus a night floor for
+      // starlight and airglow, exaggerated about a hundredfold so the night side is dim rather than black.
+      const skyLight = atmosphere.skyIrradiance(r, sunMu).mul(atmosphere.sunIlluminance).add(NIGHT_LIGHT);
 
       // Land.
       const normal = normalize(normalWorld);
@@ -110,7 +113,8 @@ export class GroundMaterial {
         detail.addAssign(periodicValueNoise(q, WAVE_PERIOD / wavelength).sub(0.5).mul(visible).mul(0.35 * 0.8 ** index));
       }
       const mottled = albedo.mul(detail.add(1));
-      const land = mottled.mul(sunlight.mul(max(dot(normal, sun), 0)).add(skyLight)).div(Math.PI);
+      // A tilted surface sees part of the sky: (1 + N·up) / 2 of it.
+      const land = mottled.mul(sunlight.mul(max(dot(normal, sun), 0)).add(skyLight.mul(dot(normal, up).mul(0.5).add(0.5)))).div(Math.PI);
 
       // Sea: wave normals from the waves' slopes, faded out where a wave is under a pixel wide.
       const wavePosition = positionWorld.add(this.waveOrigin);
@@ -133,7 +137,8 @@ export class GroundMaterial {
       const deep = vec3(0.004, 0.018, 0.035);
       const water = mix(deep, albedo.mul(0.5), pow(float(0.5), depth.div(6)));
       const body = water.mul(sunlight.mul(max(sunMu, 0)).add(skyLight)).div(Math.PI);
-      const skyReflection = skyLight.mul(vec3(0.6, 0.8, 1.2)).div(Math.PI);
+      // The sky's average radiance is its irradiance over π; the sky near the horizon, which grazing views reflect, is brighter.
+      const skyReflection = skyLight.div(Math.PI).mul(mix(float(1), float(2), pow(float(1).sub(facing), 2)));
       const halfway = normalize(sun.add(toCamera));
       // Waves too small to draw still roughen the sea: their slopes spread the glint as a broad,
       // dim lobe (Cox–Munk-like, slope variance about 0.03), the way the glitter looks from orbit.

@@ -7,6 +7,7 @@ import {
   buildTransmittanceTable, densitiesAt, earthLikeAtmosphere, extinctionAt, miePhase, rayHitsGround, rayleighPhase, skyRadiance,
   transmittanceCoords, transmittanceRay, transmittanceToTop, TRANSMITTANCE_HEIGHT, TRANSMITTANCE_WIDTH, type AtmosphereParams, type Rgb, type Vec3,
 } from './src/Atmosphere';
+import { buildIrradianceTable, buildMultipleScatteringTable, irradianceLookup, marchSky, sphereDirections, transmittanceLookup } from './src/SkyTables';
 import { generateStars, DEFAULT_STARS, STAR_DISTANCE } from './src/Stars';
 import { OrbitView } from './src/OrbitView';
 import { DEFAULT_LAYERED, layeredTerrain, MAX_HEIGHT, noise, noiseWithGradient, SEA_LEVEL } from './src/LayeredTerrain';
@@ -98,6 +99,48 @@ console.log('Sky');
     const error = Math.max(...reference.map((v, c) => Math.abs(marched[c]! - v) / Math.max(...reference)));
     check(`shader march: ${name}`, error < 0.05, `${fmt(marched)} vs ${fmt(reference)}, ${(error * 100).toFixed(2)}% of the brightest channel`);
   }
+}
+
+console.log('Multiple scattering and sky irradiance');
+{
+  const transmittance = buildTransmittanceTable(p);
+  const started = performance.now();
+  const multiple = buildMultipleScatteringTable(p, transmittance);
+  const irradiance = buildIrradianceTable(p, transmittance, multiple);
+  const built = performance.now() - started;
+  check('tables are finite and non-negative', [...multiple, ...irradiance].every((v) => Number.isFinite(v) && v >= 0), `built in ${built.toFixed(0)} ms`);
+  const r = R + 2;
+  const noonSun = normalize({ x: 0.3, y: 0, z: 1 });
+  const up = { x: 0, y: 0, z: 1 };
+  const single = marchSky(p, transmittance, null, r, up, noonSun, 32).radiance;
+  const multiplied = marchSky(p, transmittance, multiple, r, up, noonSun, 32).radiance;
+  const gain = multiplied[2] / single[2] - 1;
+  check('multiple scattering brightens the noon sky moderately', gain > 0.1 && gain < 0.8, `blue +${(gain * 100).toFixed(0)}% (${fmt(single)} → ${fmt(multiplied)})`);
+  const twilightSun = normalize({ x: 1, y: 0, z: -0.07 });
+  const twilightSingle = marchSky(p, transmittance, null, r, up, twilightSun, 32).radiance;
+  const twilightMultiple = marchSky(p, transmittance, multiple, r, up, twilightSun, 32).radiance;
+  check('and matters more in twilight (sun 4° down)', twilightMultiple[2] / twilightSingle[2] > 1 + gain, `blue ×${(twilightMultiple[2] / twilightSingle[2]).toFixed(2)}`);
+
+  const noon = irradianceLookup(irradiance, p, r, noonSun.z);
+  const direct = transmittanceLookup(transmittance, p, r, noonSun.z).map((t) => t * noonSun.z);
+  const share = (noon[1] / (noon[1] + direct[1]!));
+  check('sky light is about a tenth of daylight at noon', share > 0.05 && share < 0.25, `green: sky ${noon[1].toFixed(4)} of ${(noon[1] + direct[1]!).toFixed(4)} (${(share * 100).toFixed(0)}%)`);
+  let falling = true, previous = Infinity;
+  for (let mu = 1; mu >= -0.3; mu -= 0.05) {
+    const e = irradianceLookup(irradiance, p, r, mu)[1];
+    if (e > previous + 1e-9) falling = false;
+    previous = e;
+  }
+  check('sky light fades as the sun sets and is gone at night', falling && previous < 1e-4, `at sun 17° down: ${previous.toExponential(2)}`);
+  // The table's 64 hemisphere directions against 512.
+  const sum = [0, 0, 0];
+  const fine = sphereDirections(1024).filter((d) => d.z > 0);
+  for (const d of fine) {
+    const radiance = marchSky(p, transmittance, multiple, r, d, noonSun, 24).radiance;
+    for (let c = 0; c < 3; c += 1) sum[c]! += radiance[c]! * d.z * (2 * Math.PI) / fine.length;
+  }
+  const worst = Math.max(...[0, 1, 2].map((c) => Math.abs(noon[c]! / sum[c]! - 1)));
+  check('irradiance table converged in directions', worst < 0.05, `${fmt(noon)} vs ${fmt(sum as unknown as Rgb)} with ${fine.length} directions`);
 }
 
 console.log('Stars');
