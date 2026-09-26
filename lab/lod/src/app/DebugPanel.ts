@@ -10,6 +10,7 @@ export interface DebugPanelHandlers {
   onTileBoundaries(enabled: boolean): void;
   onSkirts(enabled: boolean): void;
   onSkirtHighlight(enabled: boolean): void;
+  onCameraLod(enabled: boolean): void;
   onHorizonCulling(enabled: boolean): void;
   onLodDistanceScale(scale: number): void;
 }
@@ -46,6 +47,8 @@ export interface DebugStats {
   lines: number;
   spacingMeters(level: number): number;
   frozen: boolean;
+  /** Benchmark progress, when one is running. */
+  bench?: string;
 }
 
 interface Toggle {
@@ -69,7 +72,7 @@ export class DebugPanel {
 
   constructor(parent: HTMLElement, private readonly handlers: DebugPanelHandlers, initialLodDistanceScale: number,
     initialDebug: { readonly meshWireframe: boolean; readonly tileBoundaries: boolean; readonly skirts: boolean;
-      readonly horizonCulling: boolean; readonly colorMode: TileColorMode }, presetId: PlanetPresetId) {
+      readonly cameraLod: boolean; readonly horizonCulling: boolean; readonly colorMode: TileColorMode }, presetId: PlanetPresetId) {
     this.toggles = [
       { key: 'KeyF', label: 'Freeze LOD (fly out to inspect)', value: false, apply: handlers.onFreeze },
       { key: 'KeyG', label: 'Grid lines', value: false, apply: handlers.onGridLines },
@@ -77,7 +80,8 @@ export class DebugPanel {
       { key: 'KeyC', label: 'Tile boundaries', value: initialDebug.tileBoundaries, apply: handlers.onTileBoundaries },
       { key: 'KeyK', label: 'Skirts', value: initialDebug.skirts, apply: handlers.onSkirts },
       { key: 'KeyJ', label: 'Highlight skirts', value: false, apply: handlers.onSkirtHighlight },
-      { key: 'KeyH', label: 'Probe horizon culling', value: initialDebug.horizonCulling, apply: handlers.onHorizonCulling },
+      { key: 'KeyV', label: 'Camera drives LOD (detail + horizon)', value: initialDebug.cameraLod, apply: handlers.onCameraLod },
+      { key: 'KeyH', label: 'Horizon culling (camera, else probe)', value: initialDebug.horizonCulling, apply: handlers.onHorizonCulling },
     ];
     this.root.className = 'lod-panel';
 
@@ -178,6 +182,7 @@ export class DebugPanel {
       `probe        r ${meters(stats.probeRadiusMeters)}  θ ${stats.probeThetaDegrees.toFixed(1)}°  φ ${stats.probePhiDegrees.toFixed(1)}°`,
       `probe alt    ${meters(stats.probeAltitudeMeters)}  camera gap ${meters(stats.probeDistanceMeters)}`,
       stats.frozen ? '── SELECTION FROZEN ──' : '',
+      stats.bench ? `── ${stats.bench} ──` : '',
       `drawn        ${stats.drawn} tiles`,
       `finest       L${finest}  ≈ ${meters(stats.spacingMeters(finest))}/cell`,
       `levels       ${histogram}`,

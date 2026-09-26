@@ -4,12 +4,29 @@ import { DebugPanel } from './DebugPanel';
 import { planetPreset, type PlanetPresetId } from './PlanetPresets';
 import { OrbitCamera } from './OrbitCamera';
 import { SphericalProbe, type ProbeAxis, type ProbeDrag } from './SphericalProbe';
+import { BENCH_SCENARIOS } from './BenchScenarios';
+import { BrowserBench, type BenchScenarioResult } from './BrowserBench';
+import type { Vec3 } from '../lod/Vec3';
 
 const root = document.querySelector<HTMLDivElement>('#app');
 if (!root) throw new Error('LOD lab root is missing');
 
-const presetId = new URLSearchParams(window.location.search).get('preset') ?? 'seam';
+const searchParams = new URLSearchParams(window.location.search);
+const presetId = searchParams.get('preset') ?? 'seam';
 const preset = planetPreset(presetId);
+// ?bench=all or ?bench=ascent,low-traverse runs scripted scenarios (landing preset only) and logs the
+// results to lab-log/lod-bench.jsonl through the dev server.
+const benchParam = searchParams.get('bench');
+const benchSlug = (name: string) => name.replaceAll(' ', '-');
+const benchScenarios = benchParam === null ? [] : benchParam === 'all' ? BENCH_SCENARIOS
+  : benchParam.split(',').map((slug) => {
+    const scenario = BENCH_SCENARIOS.find((candidate) => benchSlug(candidate.name) === slug);
+    if (!scenario) throw new Error(`main.ts: unknown bench scenario=${JSON.stringify(slug)}; valid=all,${BENCH_SCENARIOS.map((s) => benchSlug(s.name)).join(',')}`);
+    return scenario;
+  });
+// ?aa=0 turns MSAA off, for measuring its cost.
+const antialias = searchParams.get('aa') !== '0';
+if (benchParam !== null && presetId !== 'landing') throw new Error(`main.ts: bench scenarios assume the landing preset; preset=${presetId}`);
 const radius = preset.radiusMeters;
 const resolution = preset.tileResolution;
 const metersPerRenderUnit = preset.metersPerRenderUnit;
@@ -45,11 +62,16 @@ scene.add(sun);
 
 const camera = new THREE.PerspectiveCamera(preset.camera.fovDegrees, 1, 0.0001, 30000);
 const renderer = new THREE.WebGPURenderer({
-  antialias: true,
+  antialias,
   logarithmicDepthBuffer: true,
   forceWebGL: true,
+  // Timer queries cost a little every frame; only the benchmark asks for them.
+  trackTimestamp: benchParam !== null,
 });
 renderer.setClearColor(0x05060a);
+// Three's internal animation loop resets info on every browser frame, which can land between an awaited
+// renderAsync and reading its counts. Reset it right before each render instead.
+renderer.info.autoReset = false;
 if (!Number.isFinite(window.devicePixelRatio) || window.devicePixelRatio <= 0) {
   throw new Error(`main.ts: invalid devicePixelRatio=${window.devicePixelRatio}`);
 }
@@ -70,6 +92,11 @@ function panic(error: unknown): never {
   }
   if (current !== undefined) chain.push(`Non-Error cause: ${String(current)}`);
   message.textContent = `LOD LAB PANIC\n${chain.join('\nCaused by:\n')}`;
+  // Dev server only: keep a copy in lab-log/lod-panic.jsonl, where it can be read without the page.
+  if (import.meta.env.DEV) {
+    void fetch('/__lab-log/lod-panic', { method: 'POST', body: `${JSON.stringify({ date: new Date().toISOString(), href: window.location.href, chain })}\n` })
+      .catch((postError: unknown) => console.error('main.ts panic: lab-log POST failed', postError));
+  }
   message.style.cssText = 'position:fixed;inset:12px;z-index:9999;overflow:auto;margin:0;padding:20px;background:#260d14;color:#ffe0e5;white-space:pre-wrap;';
   root!.append(message);
   throw failure;
@@ -83,6 +110,7 @@ const workers = new TileWorkerPool(() => new Worker(new URL('./tile.worker.ts', 
 let frozen = false;
 let lodDistanceScale: number = preset.initialDistanceScale;
 let horizonCulling: boolean = preset.debug.horizonCulling;
+let cameraLod: boolean = preset.debug.cameraLod;
 let selection: LodSelection | undefined;
 const panel = new DebugPanel(root, {
   onPreset: (nextId) => {
@@ -97,6 +125,7 @@ const panel = new DebugPanel(root, {
   onTileBoundaries: (value) => tiles.setTileBoundaries(value),
   onSkirts: (value) => tiles.setSkirts(value),
   onSkirtHighlight: (value) => tiles.setSkirtHighlight(value),
+  onCameraLod: (value) => { cameraLod = value; },
   onHorizonCulling: (value) => { horizonCulling = value; },
   onLodDistanceScale: (value) => { lodDistanceScale = value; },
 }, lodDistanceScale, preset.debug, presetId as PlanetPresetId);
@@ -156,42 +185,106 @@ canvas.addEventListener('wheel', (event) => {
   event.preventDefault();
   const deltaPixels = event.deltaY * (event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 :
     event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? root.clientHeight : 1);
-  orbit.zoom(Math.exp(THREE.MathUtils.clamp(deltaPixels, -500, 500) * 0.0004));
+  orbit.zoom(Math.exp(THREE.MathUtils.clamp(deltaPixels, -500, 500) * 0.0001));
 }, { passive: false });
 window.addEventListener('keydown', (event) => {
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
   panel.handleKey(event.code);
 });
 
+const bench = benchScenarios.length > 0 ? new BrowserBench(benchScenarios, (results) => { void reportBench(results).catch(panic); }) : undefined;
+
+async function reportBench(results: readonly BenchScenarioResult[]): Promise<void> {
+  const backend = renderer.backend as unknown as { gl?: WebGL2RenderingContext; disjoint?: unknown };
+  const gl = backend.gl;
+  const debugInfo = gl?.getExtension('WEBGL_debug_renderer_info');
+  const report = {
+    event: 'lod-bench', date: new Date().toISOString(), href: window.location.href, preset: presetId, userAgent: navigator.userAgent,
+    gpu: gl && debugInfo ? String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)) : null,
+    timerQuery: !!backend.disjoint, multiDraw: renderer.hasFeature('WEBGL_multi_draw'), pixelRatio: renderer.getPixelRatio(),
+    canvas: [renderer.domElement.width, renderer.domElement.height], workers: workers.workerCount,
+    antialias, cameraLod, horizonCulling, lodDistanceScale, results,
+  };
+  console.log('lod-bench', report);
+  const response = await fetch('/__lab-log/lod-bench', { method: 'POST', body: `${JSON.stringify(report)}\n` });
+  if (!response.ok) throw new Error(`main.ts reportBench: lab-log POST failed; status=${response.status}; ${await response.text()}`);
+}
+
+/** Camera pose looking from `eye` at `target`, up as close to the local vertical as the view allows. */
+function lookPose(eye: Vec3, target: Vec3): { position: Vec3; forward: Vec3; up: Vec3 } {
+  const unit = (v: Vec3) => { const l = Math.hypot(v.x, v.y, v.z); return { x: v.x / l, y: v.y / l, z: v.z / l }; };
+  const forward = unit({ x: target.x - eye.x, y: target.y - eye.y, z: target.z - eye.z });
+  for (const candidate of [unit(eye), { x: 0, y: 1, z: 0 }, { x: 1, y: 0, z: 0 }]) {
+    const along = candidate.x * forward.x + candidate.y * forward.y + candidate.z * forward.z;
+    const up = { x: candidate.x - forward.x * along, y: candidate.y - forward.y * along, z: candidate.z - forward.z * along };
+    if (Math.hypot(up.x, up.y, up.z) > 1e-3) return { position: eye, forward, up: unit(up) };
+  }
+  throw new Error(`main.ts lookPose: no up vector; eye=${JSON.stringify(eye)}; target=${JSON.stringify(target)}`);
+}
+
 let previous = performance.now();
 let lastPanelUpdate = 0;
+let latestGpuMilliseconds: number | null = null;
 async function renderFrame(now: number): Promise<void> {
   if (disposed) return;
   const frameMilliseconds = now - previous;
   previous = now;
-  const pose = orbit.pose();
+  const benchFrame = bench?.frame();
+  if (benchFrame) {
+    const { x, y, z } = benchFrame.probe;
+    const r = Math.hypot(x, y, z);
+    probe.set({ r, theta: Math.acos(y / r), phi: Math.atan2(z, x) });
+  }
+  const pose = benchFrame ? lookPose(benchFrame.camera, benchFrame.target) : orbit.pose();
   const probePosition = probe.position;
   camera.position.set(0, 0, 0);
   camera.up.set(pose.up.x, pose.up.y, pose.up.z);
   camera.lookAt(pose.forward.x, pose.forward.y, pose.forward.z);
   camera.updateMatrixWorld();
   probe.sync(pose.position);
-  if (!frozen || !selection) {
+  let queueMilliseconds = 0;
+  if (!frozen || !selection || benchFrame) {
     selection = lod.select({
       observerPositions: [probePosition],
+      camera: cameraLod ? { position: pose.position, ...preset.lodCamera } : undefined,
       distanceScale: lodDistanceScale,
       horizonCulling,
     });
+    const queueStarted = performance.now();
     workers.setWanted(selection.requests);
+    queueMilliseconds = performance.now() - queueStarted;
   }
   const syncStarted = performance.now();
   tiles.sync(selection.render, pose.position);
   const syncMilliseconds = performance.now() - syncStarted;
   const gpuCreated = tiles.createdLastSync;
   const gpuDisposed = tiles.disposedLastSync;
+  renderer.info.reset();
   const renderStarted = performance.now();
   await renderer.renderAsync(scene, camera);
   const renderWaitMilliseconds = performance.now() - renderStarted;
+  const drawCalls = renderer.info.render.drawCalls;
+  const triangles = renderer.info.render.triangles;
+  const lines = renderer.info.render.lines;
+  if (bench && benchFrame) {
+    // Not awaited: waiting for the query would hold this frame past the next vsync. The value
+    // recorded is the latest resolved one, a frame or more late.
+    void renderer.resolveTimestampsAsync('render').then((value) => {
+      if (typeof value === 'number' && Number.isFinite(value)) latestGpuMilliseconds = value;
+    }).catch(panic);
+    const gpuMilliseconds = latestGpuMilliseconds;
+    bench.record({
+      rafMs: frameMilliseconds, selectMs: selection.selectMilliseconds, walkMs: selection.traversalMilliseconds,
+      balanceMs: selection.balanceMilliseconds, evictMs: selection.evictionMilliseconds, queueMs: queueMilliseconds,
+      syncMs: syncMilliseconds, renderCpuMs: renderWaitMilliseconds,
+      gpuMs: gpuMilliseconds,
+      drawCalls, triangles, drawn: selection.render.length,
+      requests: selection.requests.length, collapses: selection.balanceCollapses.length,
+    }, {
+      requests: selection.requests.length, queued: workers.queuedCount, inFlight: workers.inFlightCount,
+      built: workers.totalBuilt, buildMillisecondsTotal: workers.averageBuildMilliseconds * workers.totalBuilt,
+    }, performance.now());
+  }
   if (now - lastPanelUpdate > 150) {
     lastPanelUpdate = now;
     panel.update({
@@ -225,11 +318,12 @@ async function renderFrame(now: number): Promise<void> {
       renderWaitMilliseconds,
       gpuCreated,
       gpuDisposed,
-      drawCalls: renderer.info.render.drawCalls,
-      triangles: renderer.info.render.triangles,
-      lines: renderer.info.render.lines,
+      drawCalls,
+      triangles,
+      lines,
       spacingMeters: (level) => lod.spacingMeters(level),
       frozen,
+      bench: bench?.status,
     });
   }
   requestAnimationFrame((time) => { void renderFrame(time).catch(panic); });

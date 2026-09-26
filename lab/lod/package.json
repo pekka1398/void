@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "check": "tsx lod-check.ts",
+    "bench": "tsx lod-bench.ts",
     "face-table": "tsx face-table.ts"
   },
   "dependencies": { "three": "0.185.1" },

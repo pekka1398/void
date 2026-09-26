@@ -21,6 +21,11 @@ export const SEAM_TEST_PLANET = {
     maxDistanceRadii: 31,
     fovDegrees: 60,
   },
+  /** The viewing camera's split test: the same distance table, scaled, and capped at a level. */
+  lodCamera: {
+    distanceScale: 1,
+    maxLevel: 13,
+  },
   probe: {
     initialRadiusRadii: 1.35,
     initialPhiOffsetRadians: -0.4,
@@ -46,7 +51,8 @@ export const SEAM_TEST_PLANET = {
     rockColor: [0.38, 0.34, 0.3] as const,
   },
   debug: {
-    horizonCulling: false,
+    cameraLod: true,
+    horizonCulling: true,
     skirts: false,
     meshWireframe: true,
     tileBoundaries: true,
@@ -80,6 +86,11 @@ export const LANDING_TEST_PLANET = {
     0.0002, 0.00008, 0.00003, 0.000012, 0.0000047,
   ],
   maxCachedTiles: 2400,
+  // L14 is about 19 m per cell: ground far from the probe stays readable without an L18 region per camera.
+  lodCamera: {
+    ...NORMAL_TERRAIN_PLANET.lodCamera,
+    maxLevel: 14,
+  },
   probe: {
     ...NORMAL_TERRAIN_PLANET.probe,
     initialRadiusRadii: 1 + NORMAL_TERRAIN_PLANET.maxSurfaceHeightMeters / NORMAL_TERRAIN_PLANET.radiusMeters,

@@ -243,7 +243,7 @@ for (const clearance of [R*2, 1e6, 1e5]) {
   const ids = new Set(noCull.sel.render.map(n => n.id));
   const culled = settle(cam, true);
   for (const selection of [noCull.sel, culled.sel]) {
-    const selected = new Map(selection.render.map((node) => [node.id, node]));
+    const selected = new Map(selection.render.map((node) => [node.code, node]));
     for (const node of selection.render) for (const edge of FACE_EDGES) {
       check(!!node.data, `rendered tile lost its mesh before renderer sync; id=${node.id}; frame=${selection.frame}`);
       const neighbor = selectedNeighbor(selected, node.key, edge);
@@ -442,6 +442,95 @@ console.log('tiles built total', built, 'cached', lod.cachedTileCount, 'nodes', 
   }
   check(collapses === 0 && drops === 0, `rising with horizon culling: ${collapses} frames with balance collapses, ${drops} drops of 2+ levels under the observer; ${firstProblems.join('; ')}`);
   console.log(`rising with horizon culling: 3000 frames from the pad to 60 km; ${collapses} collapse frames, ${drops} level drops, at least ${fewest} tiles drawn`);
+}
+
+// The camera as a second detail source and the only horizon: whatever it can see is drawn, the probe
+// keeps the finest level under it, and the camera's own detail stops at its level cap.
+{
+  const p = LANDING_TEST_PLANET;
+  const options = { radiusMeters: p.radiusMeters, minSurfaceHeightMeters: p.minSurfaceHeightMeters,
+    maxSurfaceHeightMeters: p.maxSurfaceHeightMeters, occluderRadiusMeters: p.occluderRadiusMeters,
+    lodSurfaceBandMeters: p.lodSurfaceBandMeters, resolution: p.tileResolution, maxLevel: p.maxLevel,
+    splitDistanceRatios: p.splitDistanceRatios, maxCachedTiles: 20_000 };
+  const stub = (key: TileKey): TileMeshData => ({ id: tileId(key), key, origin: { x: 0, y: 0, z: 0 },
+    positions: new Float32Array(), normals: new Float32Array(), colors: new Float32Array(), grid: new Float32Array(),
+    minHeightMeters: 0, maxHeightMeters: 0, errorMeters: 0, skirtDepthMeters: 0, buildMilliseconds: 0, sampleMilliseconds: 0, finishMilliseconds: 0 });
+  type View = Parameters<PlanetLod['select']>[0];
+  const settle = (view: View) => {
+    const lod = new PlanetLod(options);
+    let selection = lod.select(view);
+    for (let iteration = 0; selection.requests.length > 0 && iteration <= 2 * p.maxLevel + 2; iteration++) {
+      for (const request of selection.requests) lod.acceptTile(stub(request.key));
+      selection = lod.select(view);
+    }
+    check(selection.requests.length === 0, `camera LOD selection did not settle; requests=${selection.requests.length}`);
+    return selection;
+  };
+  type Point = { x: number; y: number; z: number };
+  const levelUnder = (render: readonly LodNode[], point: Point): number => {
+    const ids = new Set(render.map((node) => node.id));
+    for (let level = p.maxLevel; level >= 0; level--) if (ids.has(tileId(tileContaining(point, level)))) return level;
+    return -1;
+  };
+  const angleBetween = (a: Point, b: Point) =>
+    Math.acos(Math.max(-1, Math.min(1, (a.x * b.x + a.y * b.y + a.z * b.z) / (Math.hypot(a.x, a.y, a.z) * Math.hypot(b.x, b.y, b.z)))));
+  let random = 777;
+  const next = () => { random = (Math.imul(random, 1103515245) + 12345) >>> 0; return random / 2 ** 32; };
+  // Ground directions the camera can see over the occluder (terrain that might hide some is ignored),
+  // uniform over that cap, and how many have no drawn tile.
+  const uncovered = (render: readonly LodNode[], camera: Point) => {
+    const r = Math.hypot(camera.x, camera.y, camera.z);
+    const c = { x: camera.x / r, y: camera.y / r, z: camera.z / r };
+    const cosHorizon = p.occluderRadiusMeters / r;
+    let missed = 0;
+    const samples = 2000;
+    for (let k = 0; k < samples; k++) {
+      const o = { x: next() * 2 - 1, y: next() * 2 - 1, z: next() * 2 - 1 };
+      const along = o.x * c.x + o.y * c.y + o.z * c.z;
+      const t = { x: o.x - c.x * along, y: o.y - c.y * along, z: o.z - c.z * along };
+      const tl = Math.hypot(t.x, t.y, t.z);
+      const angle = Math.acos(1 - next() * (1 - cosHorizon)) * 0.999;
+      const d = { x: c.x * Math.cos(angle) + t.x / tl * Math.sin(angle), y: c.y * Math.cos(angle) + t.y / tl * Math.sin(angle),
+        z: c.z * Math.cos(angle) + t.z / tl * Math.sin(angle) };
+      if (levelUnder(render, d) < 0) missed++;
+    }
+    return { samples, missed };
+  };
+  const top = p.radiusMeters + p.maxSurfaceHeightMeters;
+  const probe = { x: top, y: 0, z: 0 };
+  const lodCamera = p.lodCamera;
+  const cases = [
+    // Chasing the probe: 3 km behind and 1 km above it.
+    { name: 'chase camera', camera: { x: top + 1000, y: 3000, z: 0 } },
+    // At the top of the terrain a quarter of the way around the planet, past the probe's horizon.
+    { name: 'low far camera', camera: { x: 0, y: 0.6 * top, z: 0.8 * top } },
+    // Far out on the probe's far side: the whole visible face is behind the probe's horizon.
+    { name: 'distant camera', camera: { x: -3 * p.radiusMeters, y: 0, z: 0.5 * p.radiusMeters } },
+  ];
+  const summaries: string[] = [];
+  for (const { name, camera } of cases) {
+    const withCamera = settle({ observerPositions: [probe], camera: { position: camera, ...lodCamera }, distanceScale: 1, horizonCulling: true });
+    const probeOnly = settle({ observerPositions: [probe], distanceScale: 1, horizonCulling: true });
+    const seen = uncovered(withCamera.render, camera);
+    const before = uncovered(probeOnly.render, camera);
+    const underProbe = levelUnder(withCamera.render, probe);
+    const underCamera = levelUnder(withCamera.render, camera);
+    const finest = Math.max(...withCamera.render.map((node) => node.key.level));
+    const probeInView = angleBetween(probe, camera) < Math.acos(p.occluderRadiusMeters / Math.hypot(camera.x, camera.y, camera.z));
+    check(seen.missed === 0, `${name}: ${seen.missed}/${seen.samples} ground directions the camera can see have no drawn tile`);
+    check(withCamera.balanceCollapses.length === 0, `${name}: settled selection collapsed ${withCamera.balanceCollapses.length} times`);
+    // The probe's ground is drawn at full detail when the camera can see it, and not drawn when it cannot.
+    check(underProbe === (probeInView ? p.maxLevel : -1), `${name}: level under the probe L${underProbe}; probe in view=${probeInView}`);
+    if (!probeInView) check(before.missed > 0, `${name}: probe horizon alone should hide ground the camera sees (test setup)`);
+    summaries.push(`${name}: drawn=${withCamera.render.length} (probe only ${probeOnly.render.length}); under camera L${underCamera}; ` +
+      `under probe ${probeInView ? `L${underProbe}` : 'not in view'}; probe horizon alone left ${before.missed}/${seen.samples} visible directions undrawn`);
+    if (name === 'low far camera') {
+      check(underCamera === lodCamera.maxLevel, `${name}: level under the camera L${underCamera}; want its cap L${lodCamera.maxLevel}`);
+      // Nothing near the camera goes past its cap; finer tiles only surround the probe.
+      check(finest === lodCamera.maxLevel, `${name}: finest drawn L${finest}; only the camera's capped detail is in view`);
+    }
+  }
+  console.log(`camera LOD:\n  ${summaries.join('\n  ')}`);
 }
 
 // Direction -> face parameters -> tile, used by callers that stream tiles around a point.

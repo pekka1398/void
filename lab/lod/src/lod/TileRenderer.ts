@@ -25,37 +25,66 @@ export interface TileRendererOptions {
   readonly metersPerRenderUnit: number;
 }
 
+/**
+ * Instance ids the batch can hold. Fixed: growing a BatchedMesh's instance
+ * count replaces the matrix and color textures its compiled shader samples.
+ * Drawn tiles stay near 1.7k and PlanetLod caches about 2.4k.
+ */
+const MAX_TILES = 4096;
+/** Tile slots of vertex/index storage allocated at first, then grown by half. */
+const INITIAL_SLOTS = 512;
+
 interface TileGpu {
-  readonly mesh: THREE.Mesh;
-  readonly wireframe: THREE.LineSegments;
-  readonly boundary: THREE.LineSegments;
+  /** Geometry id and instance id in the batch; the two are always equal. */
+  readonly slot: number;
   readonly data: TileMeshData;
-  readonly seamSignature: string;
+  /** tileCode of the coarser neighbor stitched along each FACE_EDGES edge, or -1. */
+  readonly seams: readonly number[];
+  /** Stitched positions, kept for the debug line overlays. */
+  readonly positions: Float32Array;
+  /** Debug overlays, built only while shown: thousands of hidden line objects still cost a sync. */
+  wireframe: THREE.LineSegments | undefined;
+  boundary: THREE.LineSegments | undefined;
+  /** Origin-relative render position of the tile origin, for overlays built later. */
+  readonly offset: THREE.Vector3;
   readonly copyBytes: number;
 }
 
 /**
- * Three.js adapter: owns one mesh per ready tile, places it camera-relative
- * each frame (camera sits at the GPU origin), and exposes debug shading.
+ * Three.js adapter: draws every ready tile in one BatchedMesh (a single
+ * multi-draw), each tile a fixed-size slot placed camera-relative through its
+ * instance matrix (camera at the GPU origin), and exposes debug shading.
  * Nothing here feeds back into selection.
  */
 export class TileRenderer {
   readonly group = new THREE.Group();
   private readonly tiles = new Map<string, TileGpu>();
   private readonly index: THREE.BufferAttribute;
+  private readonly gridIndex: THREE.BufferAttribute;
   private readonly surfaceWireIndex: THREE.BufferAttribute;
   private readonly fullWireIndex: THREE.BufferAttribute;
   private readonly boundaryIndex: THREE.BufferAttribute;
   private readonly wireMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: true });
   private readonly boundaryMaterial = new THREE.LineBasicMaterial({ color: 0xff3030, depthTest: true });
-  private readonly gridIndexCount: number;
-  private readonly materials: THREE.MeshStandardNodeMaterial[] = [];
+  private readonly material: THREE.MeshStandardNodeMaterial;
+  private readonly batch: THREE.BatchedMesh;
+  private readonly verticesPerTile: number;
+  private readonly freeSlots: number[] = [];
+  private slotCount = 0;
+  private slotCapacity = INITIAL_SLOTS;
   private skirts = false;
   private lastCreated = 0;
   private lastDisposed = 0;
   private copiedMeshBytes = 0;
+  private lastSelection: readonly LodNode[] = [];
+  private lastOrigin: Vec3 | undefined;
+  private readonly matrix = new THREE.Matrix4();
+  private readonly color = new THREE.Color();
 
-  private readonly levelMix = uniform(0);
+  /** Share of the per-level color in each tile's instance color. */
+  private levelTint = 0;
+  /** 1 replaces the terrain color by white so the instance color shows alone. */
+  private readonly levelOnly = uniform(0);
   private readonly gridLines = uniform(0);
   private wireframeVisible = true;
   private boundaryVisible = true;
@@ -64,170 +93,258 @@ export class TileRenderer {
   constructor(private readonly options: TileRendererOptions) {
     const { indices, gridIndexCount } = buildTileIndices(options.resolution);
     this.index = new THREE.BufferAttribute(indices, 1);
-    this.gridIndexCount = gridIndexCount;
+    this.gridIndex = new THREE.BufferAttribute(indices.slice(0, gridIndexCount), 1);
     this.surfaceWireIndex = new THREE.BufferAttribute(buildWireIndices(indices.subarray(0, gridIndexCount)), 1);
     this.fullWireIndex = new THREE.BufferAttribute(buildWireIndices(indices), 1);
     this.boundaryIndex = new THREE.BufferAttribute(buildBoundaryIndices(options.resolution), 1);
+    this.verticesPerTile = options.resolution * options.resolution + 4 * options.resolution;
+    this.material = this.createMaterial();
+    this.batch = new THREE.BatchedMesh(MAX_TILES, INITIAL_SLOTS * this.verticesPerTile, INITIAL_SLOTS * this.index.count, this.material);
+    this.batch.name = 'lod tiles';
+    // Instances move every frame, so a whole-batch bound would go stale; each tile is culled on its own.
+    this.batch.frustumCulled = false;
+    this.batch.perObjectFrustumCulled = true;
+    // An empty batch has no vertex attributes yet; drawing it would compile the shader without them
+    // and keep that program after tiles arrive. It stays hidden until its first geometry.
+    this.batch.visible = false;
     this.group.name = 'lod-tiles';
+    this.group.add(this.batch);
   }
 
-  get drawnTileCount(): number {
-    let count = 0;
-    for (const tile of this.tiles.values()) if (tile.mesh.visible) count++;
-    return count;
-  }
+  get drawnTileCount(): number { return this.tiles.size; }
   get createdLastSync(): number { return this.lastCreated; }
   get disposedLastSync(): number { return this.lastDisposed; }
-  get rendererCopyBytes(): number { return this.copiedMeshBytes; }
+  /** CPU copies: the batch's vertex and index arrays at their current capacity, plus per-tile line positions. */
+  get rendererCopyBytes(): number {
+    let batchBytes = this.batch.geometry.index?.array.byteLength ?? 0;
+    for (const name in this.batch.geometry.attributes) batchBytes += this.batch.geometry.getAttribute(name).array.byteLength;
+    return this.copiedMeshBytes + batchBytes;
+  }
 
   setColorMode(mode: TileColorMode): void {
-    this.levelMix.value = mode === 'terrain' ? 0 : mode === 'level' ? 1 : 0.45;
+    this.levelOnly.value = mode === 'level' ? 1 : 0;
+    this.levelTint = mode === 'terrain' ? 0 : mode === 'level' ? 1 : 0.45;
+    for (const tile of this.tiles.values()) this.applyLevelColor(tile.slot, tile.data.key.level);
   }
   setGridLines(enabled: boolean): void { this.gridLines.value = enabled ? 1 : 0; }
   setMeshWireframe(enabled: boolean): void {
     this.wireframeVisible = enabled;
-    for (const tile of this.tiles.values()) tile.wireframe.visible = enabled;
+    for (const tile of this.tiles.values()) this.updateOverlays(tile);
   }
   setTileBoundaries(enabled: boolean): void {
     this.boundaryVisible = enabled;
-    for (const tile of this.tiles.values()) tile.boundary.visible = enabled;
+    for (const tile of this.tiles.values()) this.updateOverlays(tile);
   }
   setSkirtHighlight(enabled: boolean): void { this.skirtHighlight.value = enabled ? 1 : 0; }
   setSkirts(enabled: boolean): void {
+    if (enabled === this.skirts) return;
     this.skirts = enabled;
-    for (const tile of this.tiles.values()) {
-      this.applyDrawRange(tile.mesh.geometry);
-      tile.wireframe.geometry.setIndex(this.skirts ? this.fullWireIndex : this.surfaceWireIndex);
-    }
+    // Each slot's index count is fixed when it is written; rebuild every tile on the next sync.
+    for (const id of [...this.tiles.keys()]) this.disposeTile(id);
+    this.lastSelection = [];
+    this.lastOrigin = undefined;
   }
 
   /** Show exactly `render`, positioned relative to the body-fixed camera. */
   sync(render: readonly LodNode[], cameraPosition: Vec3): void {
     this.lastCreated = 0;
     this.lastDisposed = 0;
-    const wanted = new Set<string>();
-    const selected = new Map(render.map((node) => [node.id, node]));
-    const scale = 1 / this.options.metersPerRenderUnit;
-    for (const node of render) {
-      const data = node.data;
-      if (!data) throw new Error(`TileRenderer.ts sync: render selection has no mesh; id=${node.id}; level=${node.key.level}; camera=${JSON.stringify(cameraPosition)}`);
-      wanted.add(node.id);
-      const seams: Partial<Record<FaceEdge, LodNode>> = {};
-      for (const edge of FACE_EDGES) {
-        const neighbor = selectedNeighbor(selected, node.key, edge);
-        if (!neighbor) continue;
-        const difference = node.key.level - neighbor.key.level;
-        if (difference > 1) throw new Error(`TileRenderer.ts sync: adjacent LOD gap exceeds one; tile=${node.id}; edge=${edge}; neighbor=${neighbor.id}`);
-        if (difference === 1) seams[edge] = neighbor;
+    const sameSelection = render.length === this.lastSelection.length && render.every((node, index) =>
+      node === this.lastSelection[index] && this.tiles.get(node.id)?.data === node.data);
+    if (sameSelection) {
+      if (!this.lastOrigin || this.lastOrigin.x !== cameraPosition.x || this.lastOrigin.y !== cameraPosition.y || this.lastOrigin.z !== cameraPosition.z) {
+        for (const node of render) {
+          const tile = this.tiles.get(node.id);
+          if (!tile) throw new Error(`TileRenderer.ts sync: unchanged selection lost tile; id=${node.id}`);
+          this.positionTile(tile, cameraPosition);
+        }
+        this.lastOrigin = { ...cameraPosition };
       }
-      const seamSignature = FACE_EDGES.map((edge) => `${edge}:${seams[edge]?.id ?? '-'}`).join('|');
-      let tile = this.tiles.get(node.id);
-      if (tile && (tile.data !== data || tile.seamSignature !== seamSignature)) {
-        this.disposeTile(node.id);
-        tile = undefined;
-      }
-      if (!tile) tile = this.createTile(data, seams, seamSignature);
-      tile.mesh.visible = true;
-      // float64 subtraction on the CPU; only the small camera-relative offset reaches float32.
-      tile.mesh.position.set(
-        (data.origin.x - cameraPosition.x) * scale,
-        (data.origin.y - cameraPosition.y) * scale,
-        (data.origin.z - cameraPosition.z) * scale,
-      );
-      tile.wireframe.position.copy(tile.mesh.position);
-      tile.boundary.position.copy(tile.mesh.position);
+      return;
     }
-    for (const [id, tile] of this.tiles) {
+    const wanted = new Set<string>();
+    const selected = new Map(render.map((node) => [node.code, node]));
+    for (const node of render) wanted.add(node.id);
+    // Free slots of tiles that leave first, so arrivals reuse them before the storage grows.
+    for (const id of [...this.tiles.keys()]) {
       // Tile data stays cached in PlanetLod; only the GPU copy is released.
       if (!wanted.has(id)) this.disposeTile(id);
     }
+    for (const node of render) {
+      const data = node.data;
+      if (!data) throw new Error(`TileRenderer.ts sync: render selection has no mesh; id=${node.id}; level=${node.key.level}; camera=${JSON.stringify(cameraPosition)}`);
+      const seamNodes: Partial<Record<FaceEdge, LodNode>> = {};
+      const seams: number[] = [];
+      for (const edge of FACE_EDGES) {
+        const neighbor = selectedNeighbor(selected, node.key, edge);
+        const difference = neighbor ? node.key.level - neighbor.key.level : 0;
+        if (difference > 1) throw new Error(`TileRenderer.ts sync: adjacent LOD gap exceeds one; tile=${node.id}; edge=${edge}; neighbor=${neighbor?.id}`);
+        if (neighbor && difference === 1) seamNodes[edge] = neighbor;
+        seams.push(neighbor && difference === 1 ? neighbor.code : -1);
+      }
+      let tile = this.tiles.get(node.id);
+      if (tile && (tile.data !== data || tile.seams.some((code, index) => code !== seams[index]))) {
+        this.disposeTile(node.id);
+        tile = undefined;
+      }
+      if (!tile) tile = this.createTile(data, seamNodes, seams);
+      this.positionTile(tile, cameraPosition);
+    }
+    this.lastSelection = [...render];
+    this.lastOrigin = { ...cameraPosition };
   }
 
   dispose(): void {
     for (const id of [...this.tiles.keys()]) this.disposeTile(id);
-    for (const material of this.materials) material.dispose();
+    this.lastSelection = [];
+    this.lastOrigin = undefined;
+    this.batch.dispose();
+    this.material.dispose();
     this.wireMaterial.dispose();
     this.boundaryMaterial.dispose();
   }
 
-  private createTile(data: TileMeshData, seams: Partial<Record<FaceEdge, LodNode>>, seamSignature: string): TileGpu {
+  private createTile(data: TileMeshData, seamNodes: Partial<Record<FaceEdge, LodNode>>, seams: readonly number[]): TileGpu {
+    const stitched = stitchEdges(data, seamNodes, this.options.resolution);
+    const positions = stitched.positions;
     const geometry = new THREE.BufferGeometry();
-    const { positions, normals } = stitchEdges(data, seams, this.options.resolution);
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(stitched.normals, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(data.colors, 3));
     geometry.setAttribute('grid', new THREE.BufferAttribute(data.grid, 3));
-    geometry.setIndex(this.index);
-    geometry.computeBoundingSphere();
-    this.applyDrawRange(geometry);
-    const mesh = new THREE.Mesh(geometry, this.materialForLevel(data.key.level));
-    mesh.name = `tile ${data.id}`;
-    mesh.scale.setScalar(1 / this.options.metersPerRenderUnit);
-    mesh.matrixAutoUpdate = true;
-    const wireGeometry = new THREE.BufferGeometry();
-    wireGeometry.setAttribute('position', geometry.getAttribute('position'));
-    wireGeometry.setIndex(this.skirts ? this.fullWireIndex : this.surfaceWireIndex);
-    const wireframe = new THREE.LineSegments(wireGeometry, this.wireMaterial);
-    wireframe.name = `mesh edges ${data.id}`;
-    wireframe.renderOrder = 1;
-    wireframe.scale.copy(mesh.scale);
-    wireframe.visible = this.wireframeVisible;
-    const boundaryGeometry = new THREE.BufferGeometry();
-    boundaryGeometry.setAttribute('position', geometry.getAttribute('position'));
-    boundaryGeometry.setIndex(this.boundaryIndex);
-    const boundary = new THREE.LineSegments(boundaryGeometry, this.boundaryMaterial);
-    boundary.name = `tile boundary ${data.id}`;
-    boundary.renderOrder = 2;
-    boundary.scale.copy(mesh.scale);
-    boundary.visible = this.boundaryVisible;
-    this.group.add(mesh);
-    this.group.add(wireframe);
-    this.group.add(boundary);
-    const tile = { mesh, wireframe, boundary, data, seamSignature,
-      copyBytes: positions.byteLength + normals.byteLength };
+    geometry.setIndex(this.skirts ? this.index : this.gridIndex);
+    geometry.boundingSphere = originSphere(stitched.positions);
+    const slot = this.acquireSlot(geometry);
+    this.applyLevelColor(slot, data.key.level);
+    const tile: TileGpu = { slot, data, seams, positions, wireframe: undefined, boundary: undefined,
+      offset: new THREE.Vector3(), copyBytes: stitched.positions.byteLength };
     this.tiles.set(data.id, tile);
     this.copiedMeshBytes += tile.copyBytes;
     this.lastCreated++;
+    this.updateOverlays(tile);
     return tile;
+  }
+
+  /** Build or drop a tile's debug line overlays to match the current toggles. */
+  private updateOverlays(tile: TileGpu): void {
+    if (this.wireframeVisible && !tile.wireframe) {
+      tile.wireframe = this.createOverlay(tile, this.skirts ? this.fullWireIndex : this.surfaceWireIndex, this.wireMaterial, 1, `mesh edges ${tile.data.id}`);
+    } else if (!this.wireframeVisible && tile.wireframe) {
+      this.removeOverlay(tile.wireframe);
+      tile.wireframe = undefined;
+    }
+    if (this.boundaryVisible && !tile.boundary) {
+      tile.boundary = this.createOverlay(tile, this.boundaryIndex, this.boundaryMaterial, 2, `tile boundary ${tile.data.id}`);
+    } else if (!this.boundaryVisible && tile.boundary) {
+      this.removeOverlay(tile.boundary);
+      tile.boundary = undefined;
+    }
+  }
+
+  private createOverlay(tile: TileGpu, index: THREE.BufferAttribute, material: THREE.LineBasicMaterial, renderOrder: number, name: string): THREE.LineSegments {
+    const geometry = new THREE.BufferGeometry();
+    // Its own attribute over the shared array: disposing one overlay must not free the other's buffer.
+    geometry.setAttribute('position', new THREE.BufferAttribute(tile.positions, 3));
+    geometry.setIndex(index);
+    const lines = new THREE.LineSegments(geometry, material);
+    lines.name = name;
+    lines.renderOrder = renderOrder;
+    lines.scale.setScalar(1 / this.options.metersPerRenderUnit);
+    lines.position.copy(tile.offset);
+    this.group.add(lines);
+    return lines;
+  }
+
+  private removeOverlay(lines: THREE.LineSegments): void {
+    this.group.remove(lines);
+    lines.geometry.dispose();
+  }
+
+  /** Write `geometry` into a free slot, growing the batch's storage when every slot is taken. */
+  private acquireSlot(geometry: THREE.BufferGeometry): number {
+    const free = this.freeSlots.pop();
+    if (free !== undefined) {
+      this.batch.setGeometryAt(free, geometry);
+      this.batch.setVisibleAt(free, true);
+      return free;
+    }
+    if (this.slotCount >= MAX_TILES) throw new Error(`TileRenderer.ts acquireSlot: more than ${MAX_TILES} resident tiles`);
+    if (this.slotCount >= this.slotCapacity) {
+      this.slotCapacity = Math.min(MAX_TILES, Math.ceil(this.slotCapacity * 1.5));
+      this.batch.setGeometrySize(this.slotCapacity * this.verticesPerTile, this.slotCapacity * this.index.count);
+    }
+    // Every slot reserves room for skirts, so a slot written without them can later hold a tile with them.
+    const geometryId = this.batch.addGeometry(geometry, this.verticesPerTile, this.index.count);
+    const instanceId = this.batch.addInstance(geometryId);
+    if (geometryId !== this.slotCount || instanceId !== this.slotCount) {
+      throw new Error(`TileRenderer.ts acquireSlot: batch ids out of step; geometry=${geometryId}; instance=${instanceId}; slots=${this.slotCount}`);
+    }
+    this.slotCount++;
+    this.batch.visible = true;
+    return geometryId;
   }
 
   private disposeTile(id: string): void {
     const tile = this.tiles.get(id);
     if (!tile) throw new Error(`TileRenderer.ts disposeTile: unknown GPU tile id=${id}; resident=${this.tiles.size}`);
-    this.group.remove(tile.mesh);
-    this.group.remove(tile.wireframe);
-    this.group.remove(tile.boundary);
-    tile.mesh.geometry.dispose();
-    tile.wireframe.geometry.dispose();
-    tile.boundary.geometry.dispose();
+    this.batch.setVisibleAt(tile.slot, false);
+    this.freeSlots.push(tile.slot);
+    if (tile.wireframe) this.removeOverlay(tile.wireframe);
+    if (tile.boundary) this.removeOverlay(tile.boundary);
     this.copiedMeshBytes -= tile.copyBytes;
     this.tiles.delete(id);
     this.lastDisposed++;
   }
 
-  private applyDrawRange(geometry: THREE.BufferGeometry): void {
-    geometry.setDrawRange(0, this.skirts ? this.index.count : this.gridIndexCount);
+  private positionTile(tile: TileGpu, origin: Vec3): void {
+    const scale = 1 / this.options.metersPerRenderUnit;
+    const data = tile.data;
+    // float64 subtraction on the CPU; only the small origin-relative offset reaches float32.
+    tile.offset.set((data.origin.x - origin.x) * scale, (data.origin.y - origin.y) * scale, (data.origin.z - origin.z) * scale);
+    this.matrix.makeScale(scale, scale, scale).setPosition(tile.offset);
+    this.batch.setMatrixAt(tile.slot, this.matrix);
+    tile.wireframe?.position.copy(tile.offset);
+    tile.boundary?.position.copy(tile.offset);
   }
 
-  private materialForLevel(level: number): THREE.MeshStandardNodeMaterial {
-    const existing = this.materials[level];
-    if (existing) return existing;
-    const levelColor = new THREE.Color().setHSL((level * 0.137) % 1, 0.7, 0.55);
+  private applyLevelColor(slot: number, level: number): void {
+    this.color.setHSL((level * 0.137) % 1, 0.7, 0.55).lerp(WHITE, 1 - this.levelTint);
+    this.batch.setColorAt(slot, this.color);
+  }
+
+  private createMaterial(): THREE.MeshStandardNodeMaterial {
     const material = new THREE.MeshStandardNodeMaterial({ roughness: 0.92, metalness: 0 });
     const grid = attribute<'vec3'>('grid', 'vec3');
     const cell = grid.xy;
     // Anti-aliased distance to the nearest grid line, in pixels.
     const lineDistance = abs(fract(cell.sub(0.5)).sub(0.5)).div(fwidth(cell));
     const gridLine = float(1).sub(clamp(min(lineDistance.x, lineDistance.y), 0, 1));
-    const base = mix(vertexColor(), vec3(levelColor.r, levelColor.g, levelColor.b), this.levelMix);
+    // The batch multiplies this by each tile's instance color, which carries the level tint.
+    const base = mix(vertexColor(), vec3(1, 1, 1), this.levelOnly);
     const withGrid = mix(base, vec3(0.02, 0.02, 0.03), gridLine.mul(this.gridLines).mul(0.85));
     material.colorNode = mix(withGrid, vec3(1, 0, 0.85), grid.z.mul(this.skirtHighlight));
     material.polygonOffset = true;
     material.polygonOffsetFactor = 1;
     material.polygonOffsetUnits = 1;
-    this.materials[level] = material;
     return material;
   }
+}
+
+const WHITE = new THREE.Color(1, 1, 1);
+
+/**
+ * Bounding sphere about the tile origin (local 0,0,0) in one pass over the
+ * positions. A little looser than BufferGeometry.computeBoundingSphere's,
+ * which builds a box and a center first; both enclose every vertex.
+ */
+function originSphere(positions: Float32Array): THREE.Sphere {
+  let largest = 0;
+  for (let i = 0; i < positions.length; i += 3) {
+    const x = positions[i]!, y = positions[i + 1]!, z = positions[i + 2]!;
+    const squared = x * x + y * y + z * z;
+    if (squared > largest) largest = squared;
+  }
+  return new THREE.Sphere(new THREE.Vector3(), Math.sqrt(largest));
 }
 
 /** Unique edges of the exact triangles submitted by buildTileIndices. */

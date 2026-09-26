@@ -22,6 +22,23 @@ export function tileId(key: TileKey): string {
   return `${key.face}/${key.level}/${key.x}/${key.y}`;
 }
 
+/** Deepest level `tileCode` can pack: x and y each need `level` bits. */
+export const MAX_CODED_LEVEL = 21;
+const CODED_SIDE = 2 ** MAX_CODED_LEVEL;
+
+/**
+ * (face, level, x, y) packed into one exact number of at most 50 bits, for map
+ * keys on hot paths: no string is built and hashing a number is cheap. Plain
+ * arithmetic, not bitwise operators, since the result exceeds 32 bits.
+ */
+export function tileCodeOf(face: CubeFace, level: number, x: number, y: number): number {
+  return ((level * 6 + face) * CODED_SIDE + x) * CODED_SIDE + y;
+}
+
+export function tileCode(key: TileKey): number {
+  return tileCodeOf(key.face, key.level, key.x, key.y);
+}
+
 export function rootKey(face: CubeFace): TileKey {
   return { face, level: 0, x: 0, y: 0 };
 }

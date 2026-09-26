@@ -1,7 +1,7 @@
 import type { Vec3 } from './Vec3';
 import { cubeToSphere } from './CubeSphere';
 import { FACE_FRAMES } from './CubeSphere';
-import { CUBE_FACES, childKeys, rootKey, tileId, tileUvBounds, type TileKey } from './TileKey';
+import { CUBE_FACES, MAX_CODED_LEVEL, childKeys, rootKey, tileCode, tileId, tileUvBounds, type TileKey } from './TileKey';
 import { FACE_EDGES } from './FaceAdjacency';
 import { selectedNeighbor } from './TileNeighbors';
 import { tileBufferBytes, type TileMeshData } from './TileMeshBuilder';
@@ -39,13 +39,28 @@ export const HOLMAN_SPLIT_DISTANCE_RATIOS: readonly number[] = [
   0.016, 0.008, 0.004, 0.0023, 0.0014, 0.00075, 0.0005, 0.0003,
 ];
 
+/**
+ * The viewing camera's part in selection. It adds its own split distance test
+ * and, when present, is the only horizon used for culling: what is drawn is
+ * what the camera can see, so tiles hidden from the observers still show.
+ */
+export interface LodCamera {
+  /** Body-fixed camera position, meters. */
+  readonly position: Vec3;
+  /** Multiplies the split thresholds for the camera, on top of the view's distanceScale. */
+  readonly distanceScale: number;
+  /** The camera splits no tile at or beyond this level; observers may still. */
+  readonly maxLevel: number;
+}
+
 export interface LodView {
   /**
-   * Body-fixed observation points in meters, independent of the viewing
-   * camera. A tile splits for its nearest observer and is horizon-culled only
-   * when it is below every observer's horizon.
+   * Body-fixed observation points in meters (the craft). A tile splits for its
+   * nearest observer. Without a camera, a tile is horizon-culled only when it
+   * is below every observer's horizon.
    */
   readonly observerPositions: readonly Vec3[];
+  readonly camera?: LodCamera;
   readonly distanceScale: number;
   readonly horizonCulling: boolean;
 }
@@ -53,6 +68,8 @@ export interface LodView {
 export interface LodNode {
   readonly key: TileKey;
   readonly id: string;
+  /** tileCode(key): the key of selection maps on the balancing hot path. */
+  readonly code: number;
   readonly parent: LodNode | undefined;
   children: [LodNode, LodNode, LodNode, LodNode] | undefined;
   /** Fixed reference-sphere center used only for LOD distance. */
@@ -129,7 +146,7 @@ export class PlanetLod {
       options.radiusMeters + options.maxSurfaceHeightMeters < options.occluderRadiusMeters) {
       throw new Error(`PlanetLod.ts: invalid radii or LOD surface band; radius=${options.radiusMeters}; occluder=${options.occluderRadiusMeters}; globalMaxHeight=${options.maxSurfaceHeightMeters}; lodSurfaceBand=${options.lodSurfaceBandMeters}`);
     }
-    if (!Number.isInteger(options.maxLevel) || options.maxLevel < 0 || options.splitDistanceRatios.length < options.maxLevel) {
+    if (!Number.isInteger(options.maxLevel) || options.maxLevel < 0 || options.maxLevel > MAX_CODED_LEVEL || options.splitDistanceRatios.length < options.maxLevel) {
       throw new Error(`PlanetLod.ts: invalid split distance table; maxLevel=${options.maxLevel}; ratios=${options.splitDistanceRatios.length}`);
     }
     for (let level = 0; level < options.maxLevel; level++) {
@@ -196,31 +213,64 @@ export class PlanetLod {
         throw new Error(`PlanetLod.ts select: invalid observer=${JSON.stringify(observer)}; frame=${this.frame}`);
       }
     }
+    const camera = view.camera;
+    if (camera) {
+      const { position } = camera;
+      if (!Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z) ||
+        !Number.isFinite(camera.distanceScale) || camera.distanceScale <= 0 ||
+        !Number.isInteger(camera.maxLevel) || camera.maxLevel < 0 || camera.maxLevel > this.options.maxLevel) {
+        throw new Error(`PlanetLod.ts select: invalid camera=${JSON.stringify(camera)}; maxLevel=${this.options.maxLevel}; frame=${this.frame}`);
+      }
+    }
 
+    /** Drawn nodes that want to split and wait for their children. */
+    const pendingSplits: LodNode[] = [];
     const request = (node: LodNode, priority: number) => {
       if (!node.data && !requests.has(node.id)) requests.set(node.id, { key: node.key, priority });
     };
 
     const cullReason = (node: LodNode): CullReason | undefined => {
-      if (view.horizonCulling && view.observerPositions.every((observer) => this.belowHorizon(node, observer))) return 'horizon';
-      return undefined;
+      if (!view.horizonCulling) return undefined;
+      const hidden = camera ? this.belowHorizon(node, camera.position)
+        : view.observerPositions.every((observer) => this.belowHorizon(node, observer));
+      return hidden ? 'horizon' : undefined;
     };
 
-    const distanceToPatch = (node: LodNode) => {
+    const patchDistance = (node: LodNode, point: Vec3) => {
       const halfSide = this.options.radiusMeters / 2 ** node.key.level;
-      let nearest = Number.POSITIVE_INFINITY;
-      for (const observer of view.observerPositions) {
-        const delta = {
-          x: observer.x - node.lodCenter.x,
-          y: observer.y - node.lodCenter.y,
-          z: observer.z - node.lodCenter.z,
-        };
-        const u = Math.max(0, Math.abs(dot3(delta, node.lodAxisU)) - halfSide);
-        const v = Math.max(0, Math.abs(dot3(delta, node.lodAxisV)) - halfSide);
-        const radial = Math.max(0, Math.abs(dot3(delta, node.centerDirection)) - this.options.lodSurfaceBandMeters);
-        nearest = Math.min(nearest, Math.hypot(u, v, radial));
+      const delta = {
+        x: point.x - node.lodCenter.x,
+        y: point.y - node.lodCenter.y,
+        z: point.z - node.lodCenter.z,
+      };
+      const u = Math.max(0, Math.abs(dot3(delta, node.lodAxisU)) - halfSide);
+      const v = Math.max(0, Math.abs(dot3(delta, node.lodAxisV)) - halfSide);
+      const radial = Math.max(0, Math.abs(dot3(delta, node.centerDirection)) - this.options.lodSurfaceBandMeters);
+      return Math.hypot(u, v, radial);
+    };
+
+    /**
+     * Largest threshold - distance over the observers and the camera; positive
+     * means split. A zero threshold (a level nobody may split) still ranks
+     * requests by distance.
+     */
+    const splitMargin = (node: LodNode) => {
+      const level = node.key.level;
+      let threshold = level < this.options.maxLevel
+        ? this.options.radiusMeters * this.options.splitDistanceRatios[level]! * view.distanceScale : 0;
+      let distance = Number.POSITIVE_INFINITY;
+      for (const observer of view.observerPositions) distance = Math.min(distance, patchDistance(node, observer));
+      let margin = threshold - distance;
+      if (camera) {
+        const cameraThreshold = level < camera.maxLevel ? threshold * camera.distanceScale : 0;
+        const cameraDistance = patchDistance(node, camera.position);
+        if (cameraThreshold - cameraDistance > margin) {
+          margin = cameraThreshold - cameraDistance;
+          distance = cameraDistance;
+          threshold = cameraThreshold;
+        }
       }
-      return nearest;
+      return { margin, distance, threshold };
     };
 
     const visit = (node: LodNode) => {
@@ -232,11 +282,9 @@ export class PlanetLod {
         return;
       }
       if (!node.data) throw new Error(`PlanetLod.ts visit: visible node has no mesh; id=${node.id}; frame=${this.frame}; parent=${node.parent?.id ?? 'root'}`);
-      const distance = distanceToPatch(node);
-      const threshold = node.key.level < this.options.maxLevel
-        ? this.options.radiusMeters * this.options.splitDistanceRatios[node.key.level]! * view.distanceScale : 0;
-      node.splitPriority = threshold - distance;
-      const wantsSplit = distance < threshold && node.key.level < this.options.maxLevel;
+      const { margin, distance, threshold } = splitMargin(node);
+      node.splitPriority = margin;
+      const wantsSplit = margin > 0 && node.key.level < this.options.maxLevel;
       if (!wantsSplit) {
         if (!node.data) throw new Error(`PlanetLod.ts select: selected tile has no mesh; id=${node.id}; frame=${this.frame}; level=${node.key.level}; patchDistance=${distance}; threshold=${threshold}`);
         render.push(node);
@@ -265,6 +313,7 @@ export class PlanetLod {
         // defined split transition, not recovery from an invalid state.
         if (!node.data) throw new Error(`PlanetLod.ts select: split parent has no mesh; id=${node.id}; frame=${this.frame}; readyChildren=${children.filter((child) => !!child.data).length}/4; patchDistance=${distance}; threshold=${threshold}`);
         render.push(node);
+        pendingSplits.push(node);
       }
     };
 
@@ -278,6 +327,7 @@ export class PlanetLod {
     const traversalFinished = performance.now();
     const balanceCollapses: LodCollapse[] = [];
     const balanced = this.balanceSelection(render, requests, balanceCollapses);
+    this.prefetchBalanceChildren(pendingSplits, balanced, requests);
     const balanceFinished = performance.now();
     const renderedIds = new Set(balanced.map((node) => node.id));
     for (const node of balanced) node.lastUsedFrame = this.frame;
@@ -299,18 +349,18 @@ export class PlanetLod {
 
   /** Refine coarse neighbors when ready; otherwise request them and temporarily coarsen the fine side. */
   private balanceSelection(render: readonly LodNode[], requests: Map<string, TileRequest>, collapses: LodCollapse[]): LodNode[] {
-    const selected = new Map(render.map((node) => [node.id, node]));
+    const selected = new Map(render.map((node) => [node.code, node]));
     let refining = true;
     for (let pass = 0; pass < 10_000; pass++) {
       const collapse = new Map<string, LodNode>();
       const collapseCause = new Map<string, LodNode>();
-      const split = new Map<string, [LodNode, LodNode, LodNode, LodNode]>();
+      const split = new Map<number, [LodNode, LodNode, LodNode, LodNode]>();
       for (const node of selected.values()) {
         for (const edge of FACE_EDGES) {
           const neighbor = selectedNeighbor(selected, node.key, edge);
           if (neighbor && node.key.level - neighbor.key.level > 1) {
             const children = refining ? this.ensureChildren(neighbor) : neighbor.children;
-            if (refining && children?.every((child) => !!child.data)) split.set(neighbor.id, children);
+            if (refining && children?.every((child) => !!child.data)) split.set(neighbor.code, children);
             else {
               if (refining && children) for (const child of children) {
                 if (!child.data && !requests.has(child.id)) requests.set(child.id, { key: child.key, priority: node.splitPriority });
@@ -331,16 +381,16 @@ export class PlanetLod {
         continue;
       }
       if (collapse.size === 0 && split.size === 0) return [...selected.values()];
-      for (const [id, children] of split) {
-        if (!selected.delete(id)) continue;
-        for (const child of children) selected.set(child.id, child);
+      for (const [code, children] of split) {
+        if (!selected.delete(code)) continue;
+        for (const child of children) selected.set(child.code, child);
       }
       if (refining) continue;
       for (const parent of [...collapse.values()].sort((a, b) => a.key.level - b.key.level)) {
         let selectedAncestor = parent.parent;
         let alreadyCovered = false;
         while (selectedAncestor) {
-          if (selected.has(selectedAncestor.id)) { alreadyCovered = true; break; }
+          if (selected.has(selectedAncestor.code)) { alreadyCovered = true; break; }
           selectedAncestor = selectedAncestor.parent;
         }
         if (alreadyCovered) continue;
@@ -351,12 +401,12 @@ export class PlanetLod {
           if (levelDifference >= 0 && node.key.face === parent.key.face &&
             Math.floor(node.key.x / 2 ** levelDifference) === parent.key.x &&
             Math.floor(node.key.y / 2 ** levelDifference) === parent.key.y) {
-            selected.delete(node.id);
+            selected.delete(node.code);
             replaced++;
             finestReplacedLevel = Math.max(finestReplacedLevel, node.key.level);
           }
         }
-        selected.set(parent.id, parent);
+        selected.set(parent.code, parent);
         const cause = collapseCause.get(parent.id);
         if (!cause) throw new Error(`PlanetLod.ts balanceSelection: collapse has no recorded cause; parent=${parent.id}; frame=${this.frame}`);
         collapses.push({ parent: parent.id, parentLevel: parent.key.level, replaced, finestReplacedLevel,
@@ -364,6 +414,28 @@ export class PlanetLod {
       }
     }
     throw new Error(`PlanetLod.ts balanceSelection: failed to converge; frame=${this.frame}; selected=${selected.size}; maxLevel=${this.options.maxLevel}`);
+  }
+
+  /**
+   * When a waiting split lands, its children sit two levels finer than any coarser
+   * drawn neighbor, and balancing must refine that neighbor. Requesting the
+   * neighbor's children together with the split's lets both arrive at once;
+   * otherwise balancing collapses the new split back for a frame.
+   */
+  private prefetchBalanceChildren(pendingSplits: readonly LodNode[], balanced: readonly LodNode[], requests: Map<string, TileRequest>): void {
+    if (pendingSplits.length === 0) return;
+    const selected = new Map(balanced.map((node) => [node.code, node]));
+    for (const node of pendingSplits) {
+      if (!selected.has(node.code)) continue;
+      for (const edge of FACE_EDGES) {
+        const neighbor = selectedNeighbor(selected, node.key, edge);
+        if (!neighbor || neighbor.key.level >= node.key.level) continue;
+        for (const child of this.ensureChildren(neighbor)) {
+          child.lastUsedFrame = this.frame;
+          if (!child.data && !requests.has(child.id)) requests.set(child.id, { key: child.key, priority: node.splitPriority });
+        }
+      }
+    }
   }
 
   private ensureChildren(node: LodNode): [LodNode, LodNode, LodNode, LodNode] {
@@ -388,6 +460,7 @@ export class PlanetLod {
     const node: LodNode = {
       key,
       id: tileId(key),
+      code: tileCode(key),
       parent,
       children: undefined,
       lodCenter: {

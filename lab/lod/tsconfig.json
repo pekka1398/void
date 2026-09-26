@@ -11,5 +11,5 @@
     "isolatedModules": true,
     "types": ["vite/client"]
   },
-  "include": ["src", "lod-check.ts"]
+  "include": ["src", "lod-check.ts", "lod-bench.ts"]
 }

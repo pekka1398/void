@@ -1,5 +1,5 @@
 import { FACE_ADJACENCY, type FaceEdge } from './FaceAdjacency';
-import { tileId, type TileKey } from './TileKey';
+import { tileCodeOf, tileId, type TileKey } from './TileKey';
 
 /** Same-level tile across an edge, including a cube face boundary. */
 export function neighborKey(key: TileKey, edge: FaceEdge): TileKey {
@@ -25,14 +25,24 @@ export function parentKey(key: TileKey): TileKey {
   return { face: key.face, level: key.level - 1, x: Math.floor(key.x / 2), y: Math.floor(key.y / 2) };
 }
 
-/** Returns a selected same-level or coarser neighbor. A finer neighbor checks the reverse relation. */
-export function selectedNeighbor<T extends { readonly key: TileKey }>(selected: ReadonlyMap<string, T>, key: TileKey, edge: FaceEdge): T | undefined {
-  let candidate = neighborKey(key, edge);
+/**
+ * Returns a selected same-level or coarser neighbor from a map keyed by
+ * `tileCode`. A finer neighbor checks the reverse relation. Only the
+ * same-level neighbor key is allocated (it handles the cube-face crossing);
+ * the walk to coarser levels halves x and y in place, since a coarser tile
+ * across an edge is always on the same face as the same-level neighbor.
+ */
+export function selectedNeighbor<T extends { readonly key: TileKey }>(selected: ReadonlyMap<number, T>, key: TileKey, edge: FaceEdge): T | undefined {
+  const neighbor = neighborKey(key, edge);
+  const face = neighbor.face;
+  let { level, x, y } = neighbor;
   while (true) {
-    const found = selected.get(tileId(candidate));
+    const found = selected.get(tileCodeOf(face, level, x, y));
     if (found) return found;
-    if (candidate.level === 0) return undefined;
-    candidate = parentKey(candidate);
+    if (level === 0) return undefined;
+    level--;
+    x >>= 1;
+    y >>= 1;
   }
 }
 
