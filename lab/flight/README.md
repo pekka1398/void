@@ -22,7 +22,7 @@ npm run typecheck
 - **Rendering.** Everything is in the inertial ecliptic frame, relative to the upper stage, with float64 subtraction on the CPU and a logarithmic depth buffer.
   - Tiles and rocket attitudes are body-fixed. They are turned into the scene by the planet's current orientation (`FlightFrame.bodyFixedToRender`).
   - The Sun lights the scene from its real direction, and a little ambient light keeps the night side flyable.
-- **Terrain observers.** lab/lod's observers are every live part plus the camera. From far out, the planet's face toward the camera is drawn. Near the rocket, drawn terrain still equals collision terrain.
+- **Terrain observers.** lab/lod's observers are every live part; the camera does not affect LOD selection. Near the rocket, drawn terrain equals collision terrain.
 - **Camera.** This is lab/view's `OrbitCamera` and `viewState`, in single mode:
   - On the pad, the camera turns with the ground. In flight above about 25–76 km on Aurelia (0.004–0.012 R) it is inertial.
   - Zooming out from about 127 km to 1,270 km fades in the map: orbits, labels, the rocket's forecast path and its Pe/Ap.
@@ -38,6 +38,12 @@ npm run typecheck
   - `WASDQE` steer, `P` pauses, `R` resets.
   - Time rate is 1×, 5× or 20×.
 - **Log.** The dev server logs each session to `lab-log/flight.jsonl`: once per second the mode, altitude, camera distance, map weight, co-rotation, tiles, and frame, physics, LOD and draw times, plus focus changes and resets.
+
+## LOD profiling
+
+The **Draw terrain (profiling)** checkbox hides terrain draws while leaving LOD selection, tile workers, and tile object synchronization running. At a fixed camera and vessel position, wait until `queued` is zero, then compare several `flight-sample` records with the checkbox on and off. The `terrain-visibility` events mark each change.
+
+`perf` separates LOD selection (`selectMs`, with `traverseMs`, `balanceMs`, and `evictMs`), worker queue maintenance (`queueMs`), tile geometry synchronization (`syncMs`), and collider-line synchronization (`colliderMs`). `tileStats` records cache and renderer copy bytes, tile object creation/disposal over the sample interval, and the whole scene's draw calls and triangles. `drawMs` times the CPU call to `renderer.render` for the whole scene; it is **not** a GPU timer. The selected `tiles` count includes tiles outside the camera frustum, so it is not the number of terrain draw calls.
 
 ## Checks
 

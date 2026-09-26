@@ -38,6 +38,7 @@ export class TerrainView {
   readonly lod: PlanetLod;
   readonly tiles: TileRenderer;
   private readonly workers: TileWorkerPool<TerrainConfig>;
+  readonly updateTimings = { queueMilliseconds: 0, syncMilliseconds: 0 };
 
   constructor(terrain: Terrain, config: TerrainConfig, contact: ContactWorldOptions, workerCount: number, onFatal: (error: Error) => void) {
     this.lod = new PlanetLod(landingLodOptions(terrain, contact));
@@ -55,8 +56,12 @@ export class TerrainView {
    */
   update(observers: readonly Vec3[], renderOrigin: Vec3): LodSelection {
     const selection = this.lod.select({ observerPositions: observers, distanceScale: 1, horizonCulling: true });
+    const queueStarted = performance.now();
     this.workers.setWanted(selection.requests);
+    const syncStarted = performance.now();
     this.tiles.sync(selection.render, renderOrigin);
+    this.updateTimings.queueMilliseconds = syncStarted - queueStarted;
+    this.updateTimings.syncMilliseconds = performance.now() - syncStarted;
     return selection;
   }
 

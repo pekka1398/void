@@ -66,6 +66,7 @@ panel.innerHTML = `<div class="title">FLIGHT LAB <small>landing + orbit + single
 <div class="help" id="badge"></div>
 <label>Planet<select id="planet">${Object.keys(PLANETS).map((id) => `<option value="${id}">${id}</option>`).join('')}</select></label>
 <label>Time rate<select id="rate"><option value="1">1×</option><option value="5">5×</option><option value="20">20×</option></select></label>
+<label class="check"><input id="terrain-visible" type="checkbox" checked> Draw terrain (profiling)</label>
 <label class="check"><input id="wire" type="checkbox"> Mesh edges (white)</label>
 <label class="check"><input id="bounds" type="checkbox"> Tile boundaries (red)</label>
 <label class="check"><input id="colliders" type="checkbox"> Colliders: terrain and rocket (green)</label>
@@ -76,6 +77,7 @@ Drag: orbit camera · wheel: zoom out into the map · <kbd>Tab</kbd> or a label:
 document.body.append(panel);
 const planetInput = panel.querySelector<HTMLSelectElement>('#planet')!;
 const rateInput = panel.querySelector<HTMLSelectElement>('#rate')!;
+const terrainVisibleInput = panel.querySelector<HTMLInputElement>('#terrain-visible')!;
 const wireInput = panel.querySelector<HTMLInputElement>('#wire')!;
 const boundsInput = panel.querySelector<HTMLInputElement>('#bounds')!;
 const collidersInput = panel.querySelector<HTMLInputElement>('#colliders')!;
@@ -107,6 +109,8 @@ const bodyFixedGroup = new THREE.Group();
 scene.add(bodyFixedGroup);
 const terrainView = new TerrainView(terrain, planet.terrainConfig, rocket.options.contact, Math.max(1, navigator.hardwareConcurrency - 1), (e) => panic(e));
 bodyFixedGroup.add(terrainView.tiles.group);
+terrainView.tiles.group.visible = terrainVisibleInput.checked;
+terrainVisibleInput.addEventListener('change', () => { terrainView.tiles.group.visible = terrainVisibleInput.checked; });
 terrainView.tiles.setMeshWireframe(wireInput.checked);
 terrainView.tiles.setTileBoundaries(boundsInput.checked);
 wireInput.addEventListener('change', () => terrainView.tiles.setMeshWireframe(wireInput.checked));
@@ -136,6 +140,7 @@ const bodyVelocity = (i: number): Vec3 => ({ x: bodyVelocities[i * 3]!, y: bodyV
 
 const log = import.meta.env.DEV ? new LabLog('flight', (e) => panic(e)) : null;
 log?.write({ event: 'session', planet: planetId, lod: terrainView.lod.options });
+terrainVisibleInput.addEventListener('change', () => log?.write({ event: 'terrain-visibility', visible: terrainVisibleInput.checked, simTime: lander.time }));
 
 function focusName(f: Focus): string {
   return f.kind === 'vessel' ? 'vessel' : bodies[f.index]!.name;
@@ -244,8 +249,11 @@ function focusGeometry(vessel: Vec3): { geometry: FocusGeometry; position: Vec3;
 }
 
 /** Main-thread timings since the last flight-sample, ms. */
-const timings = { frames: 0, frame: { sum: 0, max: 0 }, physics: { sum: 0, max: 0 }, lod: { sum: 0, max: 0 }, draw: { sum: 0, max: 0 } };
-function timePhase(phase: 'frame' | 'physics' | 'lod' | 'draw', ms: number): void {
+const timings = { frames: 0, frame: { sum: 0, max: 0 }, physics: { sum: 0, max: 0 }, lod: { sum: 0, max: 0 },
+  select: { sum: 0, max: 0 }, traverse: { sum: 0, max: 0 }, balance: { sum: 0, max: 0 }, evict: { sum: 0, max: 0 },
+  queue: { sum: 0, max: 0 }, sync: { sum: 0, max: 0 }, collider: { sum: 0, max: 0 }, draw: { sum: 0, max: 0 } };
+const tileChanges = { created: 0, disposed: 0 };
+function timePhase(phase: 'frame' | 'physics' | 'lod' | 'select' | 'traverse' | 'balance' | 'evict' | 'queue' | 'sync' | 'collider' | 'draw', ms: number): void {
   timings[phase].sum += ms;
   timings[phase].max = Math.max(timings[phase].max, ms);
 }
@@ -297,15 +305,23 @@ function frameLoop(nowMs: number): void {
     const axes = bodyOrientation(home, t);
     const toRender = bodyFixedToRender(axes);
     bodyFixedGroup.quaternion.set(toRender.x, toRender.y, toRender.z, toRender.w);
-    // lab/lod's observers: every live part (the probe) and the camera. Tiles are placed relative to the render origin.
-    const cameraPosition = { x: origin.x + cameraOffset.x, y: origin.y + cameraOffset.y, z: origin.z + cameraOffset.z };
+    // lab/lod's observers: every live part (the probe). Tiles are placed relative to the render origin.
     const bodyFixed = (p: Vec3) => lander.frame.toBodyFixed(t, { position: p, velocity: { x: 0, y: 0, z: 0 } }).position;
     const observers = liveParts().map((which) => lander.partState(which).position);
-    observers.push(bodyFixed(cameraPosition));
     const lodStarted = performance.now();
     const renderOrigin = bodyFixed(origin);
     const selection = terrainView.update(observers, renderOrigin);
+    timePhase('select', selection.selectMilliseconds);
+    timePhase('traverse', selection.traversalMilliseconds);
+    timePhase('balance', selection.balanceMilliseconds);
+    timePhase('evict', selection.evictionMilliseconds);
+    timePhase('queue', terrainView.updateTimings.queueMilliseconds);
+    timePhase('sync', terrainView.updateTimings.syncMilliseconds);
+    tileChanges.created += terrainView.tiles.createdLastSync;
+    tileChanges.disposed += terrainView.tiles.disposedLastSync;
+    const colliderStarted = performance.now();
     colliderLines.sync(lander.contactWorlds(), renderOrigin);
+    timePhase('collider', performance.now() - colliderStarted);
     timePhase('lod', performance.now() - lodStarted);
 
     for (const which of PARTS) {
@@ -337,10 +353,19 @@ function frameLoop(nowMs: number): void {
       const phase = (p: { sum: number; max: number }) => ({ mean: timings.frames > 0 ? p.sum / timings.frames : null, max: p.max });
       log.write({ event: 'flight-sample', simTime: t, mode: lander.mode, stage: stageNumber, focus: focusName(focus), distance: orbitCamera.distance,
         mapWeight: state.mapWeight, corotation: state.corotation, altitude: geometry.kind === 'vessel' ? geometry.altitude : null,
+        terrainVisible: terrainVisibleInput.checked,
         tiles: selection.render.length, culled: selection.culled.horizon, requests: selection.requests.length, queued: terrainView.queuedBuilds,
-        perf: { frames: timings.frames, frameMs: phase(timings.frame), physicsMs: phase(timings.physics), lodMs: phase(timings.lod), drawMs: phase(timings.draw) } });
+        tileStats: { cached: terrainView.lod.cachedTileCount, cacheBytes: terrainView.lod.cachedMeshBytes,
+          rendererCopyBytes: terrainView.tiles.rendererCopyBytes, created: tileChanges.created, disposed: tileChanges.disposed,
+          sceneDrawCalls: renderer.info.render.drawCalls, sceneTriangles: renderer.info.render.triangles },
+        perf: { frames: timings.frames, frameMs: phase(timings.frame), physicsMs: phase(timings.physics), lodMs: phase(timings.lod),
+          selectMs: phase(timings.select), traverseMs: phase(timings.traverse), balanceMs: phase(timings.balance), evictMs: phase(timings.evict),
+          queueMs: phase(timings.queue), syncMs: phase(timings.sync), colliderMs: phase(timings.collider), drawMs: phase(timings.draw) } });
       timings.frames = 0;
-      for (const p of [timings.frame, timings.physics, timings.lod, timings.draw]) { p.sum = 0; p.max = 0; }
+      for (const p of [timings.frame, timings.physics, timings.lod, timings.select, timings.traverse, timings.balance,
+        timings.evict, timings.queue, timings.sync, timings.collider, timings.draw]) { p.sum = 0; p.max = 0; }
+      tileChanges.created = 0;
+      tileChanges.disposed = 0;
     }
   } catch (error) {
     panic(error);
