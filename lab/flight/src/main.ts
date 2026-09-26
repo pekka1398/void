@@ -61,7 +61,20 @@ let prediction: CoastPrediction | null = null;
 let predictionAt = -Infinity;
 let predictionGeneration = 0;
 
-const TIME_RATES = [1, 5, 20, 100, 200] as const;
+/**
+ * One row of time rates. Up to PHYSICS_MAX_RATE everything is simulated and the engine may burn;
+ * above it the rocket is on rails (lab/landing's advanceOnRails): coasting only, and no part moving
+ * near the ground.
+ */
+const TIME_RATES = [1, 2, 4, 5, 20, 100, 1000, 10_000, 100_000] as const;
+const PHYSICS_MAX_RATE = 4;
+/**
+ * Lowest clearance of any part in orbital flight each on-rails rate needs, in radii of the planet
+ * (Aurelia: 6.4 km, 9.6 km, 12.7 km, 64 km, 319 km, 1,274 km), so the ground and tile builds keep up and a coast
+ * comes down into the contact band at a rate that can still catch it. Parts asleep on the ground have
+ * no limit. A first guess, to tune.
+ */
+const RAILS_MIN_CLEARANCE_RADII: Record<number, number> = { 5: 0.001, 20: 0.0015, 100: 0.002, 1000: 0.01, 10_000: 0.05, 100_000: 0.2 };
 let timeRate: number = TIME_RATES[0];
 let altitudeMode: 'agl' | 'alt' = 'agl';
 let speedMode: 'surface' | 'orbit' = 'surface';
@@ -71,7 +84,7 @@ let speedMode: 'surface' | 'orbit' = 'surface';
 // Clickable parts are spans, not buttons, so they never take the keyboard focus from Space.
 const hud = document.createElement('div');
 hud.className = 'hud';
-hud.innerHTML = `<div class="box clock"><span id="met"></span><span class="warp">${TIME_RATES.map((r) => `<span class="click" data-rate="${r}">${r}×</span>`).join('')}</span><span class="paused" id="paused">PAUSED</span></div>
+hud.innerHTML = `<div class="box clock"><span id="met"></span><span class="warp">${TIME_RATES.map((r) => `<span class="click" data-rate="${r}">${r >= 1000 ? `${r / 1000}k` : r}×</span>`).join('')}</span><span class="paused" id="paused">PAUSED</span><span class="warp-note" id="warp-note"></span></div>
 <div class="box stages"><div class="caption" id="stage-head"></div>${PARTS.map((which) => `<div class="stage" id="stage-${which}"><span class="name"></span><span class="bar"><i></i></span><span class="fuel"></span><span class="dv"></span></div>`).join('')}<div class="hint" id="stage-hint"></div></div>
 <div class="flight">
   <div class="box throttle"><span class="caption">THR</span><span class="bar"><i id="throttle-fill"></i></span><span id="throttle"></span></div>
@@ -130,11 +143,24 @@ const stageRows = Object.fromEntries(PARTS.map((which) => {
   return [which, { row, name: part('.name'), fill: part('.bar i'), fuel: part('.fuel'), deltaV: part('.dv') }];
 })) as Record<RocketPart, { row: HTMLElement; name: HTMLElement; fill: HTMLElement; fuel: HTMLElement; deltaV: HTMLElement }>;
 const warpButtons = [...hud.querySelectorAll<HTMLElement>('[data-rate]')];
-function setTimeRate(rate: number): void {
+const warpNote = element('#warp-note');
+let warpNoteUntil = 0;
+function noteWarp(text: string): void {
+  warpNote.textContent = text;
+  warpNoteUntil = performance.now() + 3000;
+}
+/**
+ * Set a rate no higher than the current limit; asking for more says why it is held lower. An on-rails
+ * rate that is not allowed leaves a physics rate as it is rather than raising it to 4×.
+ */
+function setTimeRate(requested: number): void {
+  const limit = warpLimit();
+  const rate = requested <= limit.rate ? requested : limit.rate > PHYSICS_MAX_RATE ? limit.rate : Math.min(timeRate, limit.rate);
+  if (rate < requested && limit.reason) noteWarp(`${requested}× needs ${limit.reason}`);
   timeRate = rate;
   for (const button of warpButtons) button.classList.toggle('on', Number(button.dataset.rate) === rate);
 }
-setTimeRate(timeRate);
+for (const button of warpButtons) button.classList.toggle('on', Number(button.dataset.rate) === timeRate);
 for (const button of warpButtons) button.addEventListener('click', () => setTimeRate(Number(button.dataset.rate)));
 function stepTimeRate(step: number): void {
   const index = TIME_RATES.indexOf(timeRate as typeof TIME_RATES[number]);
@@ -237,6 +263,7 @@ function reset(): void {
   lander.free();
   lander = launch();
   stageNumber = 0; engineArmed = false; throttlePercent = 0; paused = false;
+  setTimeRate(1);
   prediction = null; predictionAt = -Infinity; predictionGeneration += 1;
   focus = { kind: 'vessel' };
   orbitCamera.distance = 45;
@@ -298,6 +325,29 @@ resize();
 
 const liveParts = () => PARTS.filter((which) => lander.partMode(which) !== 'destroyed');
 
+/**
+ * The highest rate allowed now, and what holds it there: the engine and parts moving near the ground
+ * keep it at physics rates, and the lowest part in orbital flight caps the on-rails rate.
+ */
+function warpLimit(): { rate: number; reason: string | null } {
+  const blocker = lander.railsBlocker(engineArmed ? throttlePercent / 100 : 0);
+  if (blocker) return { rate: PHYSICS_MAX_RATE, reason: `coasting (${blocker})` };
+  const flying = liveParts().filter((which) => lander.partMode(which) === 'flight');
+  if (flying.length === 0) return { rate: TIME_RATES[TIME_RATES.length - 1]!, reason: null };
+  const clearance = Math.min(...flying.map((which) => lander.partClearance(which)));
+  let allowed: number = PHYSICS_MAX_RATE;
+  let reason: string | null = null;
+  for (const rate of TIME_RATES) {
+    if (rate <= PHYSICS_MAX_RATE) continue;
+    const need = RAILS_MIN_CLEARANCE_RADII[rate];
+    if (need === undefined) throw new Error(`flight lab: no clearance limit for ${rate}×`);
+    const needMeters = need * home.radiusMeters;
+    if (clearance < needMeters) { reason = `${formatDistance(needMeters)} above the ground`; break; }
+    allowed = rate;
+  }
+  return { rate: allowed, reason };
+}
+
 /** Barycentric inertial state of a part now. */
 function partInertial(which: RocketPart): { position: Vec3; velocity: Vec3 } {
   return lander.frame.toInertial(lander.time, lander.partState(which));
@@ -349,9 +399,17 @@ function frameLoop(nowMs: number): void {
     const throttleDelta = Number(keys.has('ShiftLeft') || keys.has('ShiftRight')) - Number(keys.has('ControlLeft') || keys.has('ControlRight'));
     if (throttleDelta) throttlePercent = Math.max(0, Math.min(100, throttlePercent + throttleDelta * wall * THROTTLE_RATE_PERCENT_PER_SECOND));
     const before = lander.time;
+    // Burning, waking on the ground or coming down lowers the rate at once, as KSP does. Falling out of
+    // on-rails goes straight to 1×, so there is time to react.
+    const limit = warpLimit();
+    if (timeRate > limit.rate) {
+      if (limit.reason) noteWarp(`${timeRate}× dropped: needs ${limit.reason}`);
+      setTimeRate(limit.rate > PHYSICS_MAX_RATE ? limit.rate : 1);
+    }
     if (!paused) {
       const physicsStarted = performance.now();
-      lander.advance(wall * timeRate, command());
+      if (timeRate > PHYSICS_MAX_RATE) lander.advanceOnRails(wall * timeRate);
+      else lander.advance(wall * timeRate, command());
       timePhase('physics', performance.now() - physicsStarted);
     }
     // A booster lost while attached leaves the upper stage flying on its own.
@@ -440,7 +498,7 @@ function frameLoop(nowMs: number): void {
     if (log && nowMs - lastSample >= 1000) {
       lastSample = nowMs;
       const phase = (p: { sum: number; max: number }) => ({ mean: timings.frames > 0 ? p.sum / timings.frames : null, max: p.max });
-      log.write({ event: 'flight-sample', simTime: t, mode: lander.mode, stage: stageNumber, focus: focusName(focus), distance: orbitCamera.distance,
+      log.write({ event: 'flight-sample', simTime: t, timeRate, mode: lander.mode, stage: stageNumber, focus: focusName(focus), distance: orbitCamera.distance,
         mapWeight: state.mapWeight, corotation: state.corotation, altitude: geometry.kind === 'vessel' ? geometry.altitude : null,
         terrainVisible: terrainVisibleInput.checked,
         tiles: selection.render.length, culled: selection.culled.horizon, requests: selection.requests.length, queued: terrainView.queuedBuilds,
@@ -478,6 +536,13 @@ function updateText(upper: { position: Vec3; velocity: Vec3 }, navigation: numbe
   const osc = osculatingOrbit(r, v, body.gm);
 
   hudText.met.textContent = formatMissionTime(lander.time);
+  const limit = warpLimit();
+  for (const button of warpButtons) {
+    const blocked = Number(button.dataset.rate) > limit.rate;
+    button.classList.toggle('blocked', blocked);
+    button.title = blocked && limit.reason ? `needs ${limit.reason}` : '';
+  }
+  if (performance.now() > warpNoteUntil) warpNote.textContent = '';
   hudText.paused.hidden = !paused;
 
   hudText.altMode.textContent = altitudeMode === 'agl' ? 'AGL' : 'ALT';

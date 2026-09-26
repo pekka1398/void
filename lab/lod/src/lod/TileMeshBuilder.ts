@@ -8,7 +8,12 @@ export interface SurfaceSample {
   readonly color: readonly [number, number, number];
 }
 
-export type SurfaceSampler = (bodyFixedDirection: Vec3) => SurfaceSample;
+/**
+ * `cellMeters` is the nominal grid spacing of the tile being built. A sampler may leave out
+ * detail finer than it, as a mipmap does, so coarse tiles do not alias it; one that ignores
+ * it samples full detail at every level.
+ */
+export type SurfaceSampler = (bodyFixedDirection: Vec3, cellMeters: number) => SurfaceSample;
 
 export interface TileMeshData {
   readonly id: string;
@@ -19,6 +24,8 @@ export interface TileMeshData {
   readonly positions: Float32Array;
   readonly normals: Float32Array;
   readonly colors: Float32Array;
+  /** Surface height above the reference radius at every vertex, metres; skirts repeat their edge vertex's. */
+  readonly heights: Float32Array;
   /** (i, j, skirt): integer grid coordinate, skirts repeat their edge vertex's (i, j) with skirt = 1. */
   readonly grid: Float32Array;
   readonly minHeightMeters: number;
@@ -37,7 +44,7 @@ export interface TileMeshData {
 
 /** Resident typed-array payload, excluding JS objects and renderer copies. */
 export function tileBufferBytes(tile: TileMeshData): number {
-  return tile.positions.byteLength + tile.normals.byteLength + tile.colors.byteLength + tile.grid.byteLength;
+  return tile.positions.byteLength + tile.normals.byteLength + tile.colors.byteLength + tile.heights.byteLength + tile.grid.byteLength;
 }
 
 export interface TileMeshOptions {
@@ -62,8 +69,10 @@ export function buildTileMesh(key: TileKey, sampler: SurfaceSampler, options: Ti
 
   // The surface point at the tile centre: vertex offsets from it stay about a tile
   // size even on tall terrain, so their float32 copies keep sub-0.1 mm precision.
+  // Nominal cell: a face-centre tile's width over its N - 1 cells (the tangent warp keeps others within 1.5x).
+  const cellMeters = (radius * (Math.PI / 2)) / 2 ** key.level / (n - 1);
   const origin = cubeToSphere(key.face, (u0 + u1) / 2, (v0 + v1) / 2);
-  const originRadius = radius + sampler(origin).heightMeters;
+  const originRadius = radius + sampler(origin, cellMeters).heightMeters;
   origin.x *= originRadius;
   origin.y *= originRadius;
   origin.z *= originRadius;
@@ -80,7 +89,7 @@ export function buildTileMesh(key: TileKey, sampler: SurfaceSampler, options: Ti
   for (let j = 0; j < e; j++) {
     for (let i = 0; i < e; i++) {
       cubeToSphere(key.face, u0 + (i - 1) * du, v0 + (j - 1) * dv, dir);
-      const sample = sampler(dir);
+      const sample = sampler(dir, cellMeters);
       const r = radius + sample.heightMeters;
       const k = (j * e + i) * 3;
       ex[k] = dir.x * r - origin.x;
@@ -108,6 +117,7 @@ export function buildTileMesh(key: TileKey, sampler: SurfaceSampler, options: Ti
   const positions = new Float32Array(vertexCount * 3);
   const normals = new Float32Array(vertexCount * 3);
   const grid = new Float32Array(vertexCount * 3);
+  const vertexHeights = new Float32Array(vertexCount);
 
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < n; i++) {
@@ -142,12 +152,13 @@ export function buildTileMesh(key: TileKey, sampler: SurfaceSampler, options: Ti
       normals[g * 3 + 2] = nz;
       grid[g * 3] = i;
       grid[g * 3 + 1] = j;
+      vertexHeights[g] = heights[g]!;
     }
   }
 
   const errorMeters = measureHalfResolutionError(positions, n);
   // Deep enough to cover the largest crack a coarser neighbor can open along this edge.
-  const spacing = radius * (Math.PI / 2) / 2 ** key.level / (n - 1);
+  const spacing = cellMeters;
   const skirtDepthMeters = Math.max(errorMeters * 2, spacing * 0.25, 1);
 
   const edgeVertex = [
@@ -173,6 +184,7 @@ export function buildTileMesh(key: TileKey, sampler: SurfaceSampler, options: Ti
       grid[k * 3] = grid[g * 3]!;
       grid[k * 3 + 1] = grid[g * 3 + 1]!;
       grid[k * 3 + 2] = 1;
+      vertexHeights[k] = heights[g]!;
     }
   }
 
@@ -184,6 +196,7 @@ export function buildTileMesh(key: TileKey, sampler: SurfaceSampler, options: Ti
     positions,
     normals,
     colors,
+    heights: vertexHeights,
     grid,
     minHeightMeters: minHeight,
     maxHeightMeters: maxHeight,

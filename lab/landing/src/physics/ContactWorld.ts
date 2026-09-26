@@ -219,6 +219,23 @@ export class ContactWorld {
     return deltaV;
   }
 
+  /** Every body is asleep in Rapier: at rest on the ground, nothing for a step to change. */
+  get asleep(): boolean {
+    for (const body of this.bodies) if (!body.isSleeping()) return false;
+    return true;
+  }
+
+  /**
+   * On-rails time: move the clock without stepping Rapier. Only for a world whose bodies are all asleep:
+   * at rest in the body-fixed frame, they stay where they are while the planet turns them through space.
+   */
+  idleTo(time: number): void {
+    if (!this.asleep) throw new Error('ContactWorld.idleTo: a body is awake; only resting worlds go on rails');
+    if (!(time >= this.time)) throw new RangeError(`ContactWorld.idleTo(${time}) is before ${this.time}`);
+    this.frame.ephemeris.extendTo(time + this.options.stepSeconds);
+    this.time = time;
+  }
+
   step(extra?: ExtraAcceleration): void {
     const dt = this.options.stepSeconds;
     this.frame.ephemeris.extendTo(this.time + dt);

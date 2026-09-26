@@ -269,6 +269,42 @@ export class PartJointRocket {
     }
   }
 
+  /**
+   * Why the rocket cannot go on rails now, or null if it can. On rails (KSP's high time warp) nothing is
+   * simulated in Rapier and no engine burns: every live part is either coasting in orbital flight or
+   * asleep on the ground.
+   */
+  railsBlocker(throttle: number): string | null {
+    if (this.parts.upper.wreck) return 'the vessel is destroyed';
+    if (throttle > 0 && this.parts[this.enginePart].fuelKg > 0) return 'engine firing';
+    if (this.contactWorlds().some((world) => !world.asleep)) return 'moving near the ground';
+    return null;
+  }
+
+  /**
+   * Advance on rails: flight parts coast (no thrust, attitude held in the body-fixed frame, spin
+   * stopped), resting parts keep their place on the ground. Returns false, having stopped short, when a
+   * part came down into the contact band or woke up: the caller drops back to physics time.
+   */
+  advanceOnRails(dt: number): boolean {
+    if (!(dt >= 0) || !Number.isFinite(dt)) throw new RangeError(`PartJointRocket.advanceOnRails(${dt})`);
+    const blocker = this.railsBlocker(0);
+    if (blocker) throw new Error(`PartJointRocket.advanceOnRails: ${blocker}`);
+    for (const which of PARTS) if (!this.parts[which].body) this.parts[which].angularVelocity = ZERO;
+    const target = this.simTime + this.pendingSeconds + dt;
+    this.pendingSeconds = 0;
+    const coast: LanderControl = { throttle: 0, up: 0, prograde: 0 };
+    for (;;) {
+      this.updateModes(coast);
+      if (this.railsBlocker(0)) return false;
+      if (this.simTime + 1e-9 >= target) return true;
+      const flying = this.attachedRun !== null || PARTS.some((which) => this.parts[which].run);
+      if (flying) this.flightChunk(target, coast, false);
+      else this.simTime = target;
+      for (const world of this.contactWorlds()) world.idleTo(this.simTime);
+    }
+  }
+
   free(): void {
     for (const world of this.contactWorlds()) world.free();
     for (const which of PARTS) { this.parts[which].world = null; this.parts[which].body = null; }
@@ -289,7 +325,8 @@ export class PartJointRocket {
     return r - this.terrain.radiusMeters - this.terrain.sample({ x: p.x / r, y: p.y / r, z: p.z / r }).heightMeters;
   }
 
-  private partClearance(which: RocketPart): number { return this.clearanceAt(this.partState(which).position); }
+  /** Height of one part's reference point above the terrain under it, m. */
+  partClearance(which: RocketPart): number { return this.clearanceAt(this.partState(which).position); }
 
   private toInertialDirection(local: Vec3, time: number): Vec3 {
     const axes = bodyOrientation(this.frame.body, time);
@@ -361,12 +398,16 @@ export class PartJointRocket {
     }
   }
 
-  /** Every part is in orbital flight: advance them together, stopping before any can reach the contact band. */
-  private flightChunk(target: number, control: LanderControl): void {
+  /**
+   * Every part is in orbital flight (or, on rails, the rest asleep): advance them together, stopping
+   * before any can reach the contact band. `attitude` false holds attitudes (on rails).
+   */
+  private flightChunk(target: number, control: LanderControl, attitude = true): void {
     const units: { run: PropagationRun; parts: readonly RocketPart[] }[] = this.attachedRun
       ? [{ run: this.attachedRun, parts: PARTS }]
       : PARTS.filter((which) => this.parts[which].run).map((which) => ({ run: this.parts[which].run!, parts: [which] }));
-    let end = Math.min(target, this.simTime + FLIGHT_CHUNK_SECONDS);
+    // Chunks bound the attitude steps; on rails attitudes are held, and only the band limits a chunk.
+    let end = attitude ? Math.min(target, this.simTime + FLIGHT_CHUNK_SECONDS) : target;
     for (const unit of units) {
       const states = unit.parts.map((which) => this.partState(which));
       const gap = Math.min(...states.map((s) => this.clearanceAt(s.position))) - this.options.bandEnterMeters;
@@ -382,8 +423,10 @@ export class PartJointRocket {
     }
     for (const unit of units) this.propagate(unit.run, end, unit.parts.includes(this.enginePart) ? this.enginePart : null, control.throttle);
     const step = this.options.contact.stepSeconds;
-    for (const unit of units) {
-      for (let t = this.simTime; t < end - 1e-12; t += step) this.stepFlightAttitude(unit.parts, control, Math.min(step, end - t));
+    if (attitude) {
+      for (const unit of units) {
+        for (let t = this.simTime; t < end - 1e-12; t += step) this.stepFlightAttitude(unit.parts, control, Math.min(step, end - t));
+      }
     }
     this.simTime = end;
   }

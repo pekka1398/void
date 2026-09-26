@@ -135,6 +135,13 @@ export class TileRenderer {
     this.boundaryVisible = enabled;
     for (const tile of this.tiles.values()) this.updateOverlays(tile);
   }
+  /**
+   * Draw the tiles with the caller's material (lab/scenery's lit ground and sea). Tile vertices carry
+   * position, normal, color, height (metres above the reference radius) and grid. The debug shading
+   * (level colors, grid lines, skirt highlight) belongs to the default material and stops showing.
+   * The caller owns the material and disposes it.
+   */
+  setMaterial(material: THREE.Material): void { this.batch.material = material; }
   setSkirtHighlight(enabled: boolean): void { this.skirtHighlight.value = enabled ? 1 : 0; }
   setSkirts(enabled: boolean): void {
     if (enabled === this.skirts) return;
@@ -211,6 +218,7 @@ export class TileRenderer {
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('normal', new THREE.BufferAttribute(stitched.normals, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(data.colors, 3));
+    geometry.setAttribute('height', new THREE.BufferAttribute(stitched.heights, 1));
     geometry.setAttribute('grid', new THREE.BufferAttribute(data.grid, 3));
     geometry.setIndex(this.skirts ? this.index : this.gridIndex);
     geometry.boundingSphere = originSphere(stitched.positions);
@@ -384,9 +392,10 @@ function edgeVertex(edge: FaceEdge, s: number, n: number): number {
   }
 }
 
-export function stitchEdges(data: TileMeshData, seams: Partial<Record<FaceEdge, LodNode>>, n: number): { positions: Float32Array; normals: Float32Array } {
+export function stitchEdges(data: TileMeshData, seams: Partial<Record<FaceEdge, LodNode>>, n: number): { positions: Float32Array; normals: Float32Array; heights: Float32Array } {
   const positions = new Float32Array(data.positions);
   const normals = new Float32Array(data.normals);
+  const heights = new Float32Array(data.heights);
   for (const edge of FACE_EDGES) {
     const coarseNode = seams[edge];
     if (!coarseNode) continue;
@@ -409,13 +418,15 @@ export function stitchEdges(data: TileMeshData, seams: Partial<Record<FaceEdge, 
       const blend = coarsePosition - lower;
       const a = edgeVertex(coarseEdge, lower, n);
       const b = edgeVertex(coarseEdge, upper, n);
+      const skirtEdge = edge === 'v-' ? 0 : edge === 'v+' ? 1 : edge === 'u-' ? 2 : 3;
+      const skirt = n * n + skirtEdge * n + s;
+      heights[destination] = coarse.heights[a]! * (1 - blend) + coarse.heights[b]! * blend;
+      heights[skirt] = heights[destination]!;
       for (let axis = 0; axis < 3; axis++) {
         const originAxis = axis === 0 ? coarse.origin.x - data.origin.x : axis === 1 ? coarse.origin.y - data.origin.y : coarse.origin.z - data.origin.z;
         const target = originAxis + coarse.positions[a * 3 + axis]! * (1 - blend) + coarse.positions[b * 3 + axis]! * blend;
         const delta = target - positions[destination * 3 + axis]!;
         positions[destination * 3 + axis] = target;
-        const skirtEdge = edge === 'v-' ? 0 : edge === 'v+' ? 1 : edge === 'u-' ? 2 : 3;
-        const skirt = n * n + skirtEdge * n + s;
         // Skirt vertices retain their original depth under the deformed edge.
         positions[skirt * 3 + axis] = positions[skirt * 3 + axis]! + delta;
         normals[destination * 3 + axis] = coarse.normals[a * 3 + axis]! * (1 - blend) + coarse.normals[b * 3 + axis]! * blend;
@@ -423,5 +434,5 @@ export function stitchEdges(data: TileMeshData, seams: Partial<Record<FaceEdge, 
       }
     }
   }
-  return { positions, normals };
+  return { positions, normals, heights };
 }

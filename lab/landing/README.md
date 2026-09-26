@@ -79,7 +79,12 @@ Not modelled: the frame's fictitious torques on spinning bodies (of order ω, 6e
 
 - A lander has two modes: inertial free flight with the orbit lab's propagator and rotating-frame Rapier contacts near the terrain. Contact stays live after touchdown, so the craft can tip, bounce or slide. The contact band has separate entry and exit heights to avoid repeated switching.
 - Thrust uses the same surface-relative direction law in both physics engines. Contact integration accounts for fuel lost during each step and carries the half-step thrust across mode changes.
-- The P3 check launches from a slope, crosses from contact to free flight and back, then reaches the ground. While clear of terrain, its trajectory is compared with an independent run of the orbit lab's integrator. A separate controlled landing reaches about 13.6 km and touches down below 1 m/s. Once on the ground it remains a Rapier rigid body; high time warp is unavailable during contact.
+- The P3 check launches from a slope, crosses from contact to free flight and back, then reaches the ground. While clear of terrain, its trajectory is compared with an independent run of the orbit lab's integrator. A separate controlled landing reaches about 13.6 km and touches down below 1 m/s. Once on the ground it remains a Rapier rigid body.
+- **On rails** (`PartJointRocket.advanceOnRails`, for high time warp):
+  - Flight parts coast on the propagator with attitudes held and spin stopped.
+  - Contact worlds whose bodies Rapier has put to sleep only move their clock (`ContactWorld.idleTo`). A resting part stays fixed in the body-fixed frame and turns with the planet.
+  - `railsBlocker(throttle)` says why it is not allowed: an engine firing, or a part awake near the ground. It returns false where a coasting part comes down into the contact band, and the caller goes back to physics time.
+  - The check puts a resting rocket on rails for a day (it moves 0 m) and compares 200 s of coasting on rails with physics time (6e-5 m apart). It also checks that a coast coming down stops at the band.
 
 ## Interactive page
 

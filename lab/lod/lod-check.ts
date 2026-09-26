@@ -294,7 +294,7 @@ console.log('tiles built total', built, 'cached', lod.cachedTileCount, 'nodes', 
     for (const request of selected.requests) {
       const key = request.key;
       const tile: TileMeshData = { id: tileId(key), key, origin: { x: 0, y: 0, z: 0 },
-        positions: new Float32Array(), normals: new Float32Array(), colors: new Float32Array(), grid: new Float32Array(),
+        positions: new Float32Array(), normals: new Float32Array(), colors: new Float32Array(), heights: new Float32Array(), grid: new Float32Array(),
         minHeightMeters: 0, maxHeightMeters: 0, errorMeters: 0, skirtDepthMeters: 0,
         buildMilliseconds: 0, sampleMilliseconds: 0, finishMilliseconds: 0 };
       landing.acceptTile(tile);
@@ -324,7 +324,7 @@ console.log('tiles built total', built, 'cached', lod.cachedTileCount, 'nodes', 
     for (const request of selected.requests) {
       const key = request.key;
       multi.acceptTile({ id: tileId(key), key, origin: { x: 0, y: 0, z: 0 },
-        positions: new Float32Array(), normals: new Float32Array(), colors: new Float32Array(), grid: new Float32Array(),
+        positions: new Float32Array(), normals: new Float32Array(), colors: new Float32Array(), heights: new Float32Array(), grid: new Float32Array(),
         minHeightMeters: 0, maxHeightMeters: 0, errorMeters: 0, skirtDepthMeters: 0,
         buildMilliseconds: 0, sampleMilliseconds: 0, finishMilliseconds: 0 });
     }
@@ -343,7 +343,7 @@ console.log('tiles built total', built, 'cached', lod.cachedTileCount, 'nodes', 
     for (const request of alone.requests) {
       const key = request.key;
       single.acceptTile({ id: tileId(key), key, origin: { x: 0, y: 0, z: 0 },
-        positions: new Float32Array(), normals: new Float32Array(), colors: new Float32Array(), grid: new Float32Array(),
+        positions: new Float32Array(), normals: new Float32Array(), colors: new Float32Array(), heights: new Float32Array(), grid: new Float32Array(),
         minHeightMeters: 0, maxHeightMeters: 0, errorMeters: 0, skirtDepthMeters: 0,
         buildMilliseconds: 0, sampleMilliseconds: 0, finishMilliseconds: 0 });
     }
@@ -362,7 +362,7 @@ console.log('tiles built total', built, 'cached', lod.cachedTileCount, 'nodes', 
   const observer = { x: R * 1.001 / l, y: R * 1.001 * 0.98 / l, z: R * 1.001 * 0.1 / l };
   const view = { observerPositions: [observer], distanceScale: 1, horizonCulling: false };
   const stub = (key: TileKey): TileMeshData => ({ id: tileId(key), key, origin: { x: 0, y: 0, z: 0 },
-    positions: new Float32Array(), normals: new Float32Array(), colors: new Float32Array(), grid: new Float32Array(),
+    positions: new Float32Array(), normals: new Float32Array(), colors: new Float32Array(), heights: new Float32Array(), grid: new Float32Array(),
     minHeightMeters: 0, maxHeightMeters: 0, errorMeters: 0, skirtDepthMeters: 0, buildMilliseconds: 0, sampleMilliseconds: 0, finishMilliseconds: 0 });
   const underObserver = (selection: { render: readonly LodNode[] }) => {
     const ids = new Set(selection.render.map((node) => node.id));
@@ -403,7 +403,7 @@ console.log('tiles built total', built, 'cached', lod.cachedTileCount, 'nodes', 
   const rising = new PlanetLod({ radiusMeters: radius, minSurfaceHeightMeters: 0, maxSurfaceHeightMeters: maxHeight,
     occluderRadiusMeters: radius, lodSurfaceBandMeters: maxHeight, resolution: N, maxLevel, splitDistanceRatios: ratios });
   const stub = (key: TileKey): TileMeshData => ({ id: tileId(key), key, origin: { x: 0, y: 0, z: 0 },
-    positions: new Float32Array(), normals: new Float32Array(), colors: new Float32Array(), grid: new Float32Array(),
+    positions: new Float32Array(), normals: new Float32Array(), colors: new Float32Array(), heights: new Float32Array(), grid: new Float32Array(),
     minHeightMeters: 0, maxHeightMeters: 0, errorMeters: 0, skirtDepthMeters: 0, buildMilliseconds: 0, sampleMilliseconds: 0, finishMilliseconds: 0 });
   const at = (step: number) => {
     // A curved ascent: 0 to 60 km up while travelling 90 km downrange.
@@ -453,7 +453,7 @@ console.log('tiles built total', built, 'cached', lod.cachedTileCount, 'nodes', 
     lodSurfaceBandMeters: p.lodSurfaceBandMeters, resolution: p.tileResolution, maxLevel: p.maxLevel,
     splitDistanceRatios: p.splitDistanceRatios, maxCachedTiles: 20_000 };
   const stub = (key: TileKey): TileMeshData => ({ id: tileId(key), key, origin: { x: 0, y: 0, z: 0 },
-    positions: new Float32Array(), normals: new Float32Array(), colors: new Float32Array(), grid: new Float32Array(),
+    positions: new Float32Array(), normals: new Float32Array(), colors: new Float32Array(), heights: new Float32Array(), grid: new Float32Array(),
     minHeightMeters: 0, maxHeightMeters: 0, errorMeters: 0, skirtDepthMeters: 0, buildMilliseconds: 0, sampleMilliseconds: 0, finishMilliseconds: 0 });
   type View = Parameters<PlanetLod['select']>[0];
   const settle = (view: View) => {

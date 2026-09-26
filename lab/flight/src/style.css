@@ -31,6 +31,9 @@ canvas:active { cursor: grabbing; }
 .hud .warp { display: flex; gap: 2px; }
 .hud .warp span { padding: 0 5px; border-radius: 3px; color: #6d7890; }
 .hud .warp span.on { background: #2a3550; color: #fff; }
+.hud .warp span.blocked { color: #3a4254; }
+.hud .warp-note { color: #ffd479; font-size: 11px; }
+.hud .warp-note:empty { display: none; }
 .hud .paused { color: #ffd479; font-weight: 700; letter-spacing: 0.1em; }
 
 

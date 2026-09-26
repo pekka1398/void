@@ -22,7 +22,7 @@ const BUILD_MODELS = [
 ] as const;
 
 const stub = (key: TileKey): TileMeshData => ({ id: tileId(key), key, origin: { x: 0, y: 0, z: 0 },
-  positions: new Float32Array(), normals: new Float32Array(), colors: new Float32Array(), grid: new Float32Array(),
+  positions: new Float32Array(), normals: new Float32Array(), colors: new Float32Array(), heights: new Float32Array(), grid: new Float32Array(),
   minHeightMeters: 0, maxHeightMeters: 0, errorMeters: 0, skirtDepthMeters: 0, buildMilliseconds: 0, sampleMilliseconds: 0, finishMilliseconds: 0 });
 
 function newLod(): PlanetLod {

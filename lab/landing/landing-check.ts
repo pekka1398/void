@@ -10,7 +10,8 @@ import { predictCoast } from './src/vessel/CoastPrediction';
 import { ANGULAR_DAMPING, ContactWorld, type ContactWorldOptions } from './src/physics/ContactWorld';
 import { PlanetFrame, type FrameState } from './src/physics/PlanetFrame';
 import type { Terrain } from './src/terrain/Surface';
-import { PLANETS, pebble, planetEphemeris } from './src/planet/Planets';
+import { aurelia, PLANETS, pebble, planetEphemeris } from './src/planet/Planets';
+import { demoRocket } from './src/vessel/DemoRocket';
 import { cubeToSphere, FACE_EDGES, neighborKey, PlanetLod, sphereToCube, tileContaining, tileId, tilesAround, type TileMeshData } from './src/lodCore';
 import { landingLodOptions } from './src/terrain/TerrainView';
 import { terrainFromConfig } from './src/terrain/TerrainConfig';
@@ -734,7 +735,7 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
         for (const request of selected.requests) {
           const k = request.key;
           lod.acceptTile({ id: tileId(k), key: k, origin: { x: 0, y: 0, z: 0 }, positions: new Float32Array(), normals: new Float32Array(),
-            colors: new Float32Array(), grid: new Float32Array(), minHeightMeters: 0, maxHeightMeters: 0, errorMeters: 0,
+            colors: new Float32Array(), heights: new Float32Array(), grid: new Float32Array(), minHeightMeters: 0, maxHeightMeters: 0, errorMeters: 0,
             skirtDepthMeters: 0, buildMilliseconds: 0, sampleMilliseconds: 0, finishMilliseconds: 0 });
         }
         selected = lod.select(view);
@@ -781,6 +782,50 @@ for (const [planetId, make] of Object.entries(PLANETS)) {
   check(`launch and return on ${planetId}`, ok,
     `${planet.label}: ${changes.slice(0, 2).map((c) => `${c.from}→${c.to} at ${c.time.toFixed(0)} s`).join(', ')}; peak ${(peak / 1000).toFixed(2)} km (a vertical 20 s burn alone reaches ${(burnOnly / 1000).toFixed(2)} km)`);
   rocket.free();
+}
+
+// --- On rails (high time warp) ---------------------------------------------------------
+{
+  const planet = aurelia();
+  const { ephemeris, bodyIndex } = planetEphemeris(planet);
+  const demo = demoRocket(planet.terrain);
+  const make = () => PartJointRocket.landed(RAPIER, ephemeris, bodyIndex, planet.terrain, demo.full, demo.upper, demo.booster, demo.options, demo.launchSite);
+  const coast: LanderControl = { throttle: 0, up: 1, prograde: 0, turn: ZERO_VEC };
+  const gap = (a: Vec3, b: Vec3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+
+  // A rocket settling on the pad is awake, then Rapier puts it to sleep; asleep it can go on rails.
+  const pad = make();
+  const settling = pad.railsBlocker(0);
+  pad.advance(6, coast);
+  const firing = pad.railsBlocker(0.5);
+  const resting = pad.railsBlocker(0);
+  const before = pad.bodyFixedState().position;
+  const ok = pad.advanceOnRails(86_400);
+  const moved = gap(pad.bodyFixedState().position, before);
+  const worldTime = pad.contactWorlds()[0]!.time;
+  pad.advance(2, coast);
+  const after = gap(pad.bodyFixedState().position, before);
+  check('on rails: resting on the ground', settling !== null && firing !== null && resting === null && ok && moved === 0 && Math.abs(worldTime - pad.time + 2) < 1e-6 && after < 1e-3 && pad.mode === 'contact',
+    `settling: "${settling}"; throttle up: "${firing}"; asleep: on rails for a day moved ${moved} m, Rapier's clock followed to ${worldTime.toFixed(0)} s; 2 s of physics after it moved ${fmt(after)} m`);
+  pad.free();
+  let refused = false;
+  const awake = make();
+  try { awake.advanceOnRails(1); } catch { refused = true; }
+  check('on rails: refused while a part is awake near the ground', refused, refused ? 'advanceOnRails throws' : 'did not throw');
+  awake.free();
+
+  // A coasting stack: on rails is the same coast as physics time; coming down, rails stop at the band.
+  const burn: LanderControl = { ...coast, throttle: 1 };
+  const [railed, simulated] = [make(), make()];
+  for (const l of [railed, simulated]) { for (let i = 0; i < 80 * 60; i += 1) l.advance(1 / 60, burn); l.advance(30, coast); }
+  railed.advanceOnRails(200);
+  simulated.advance(200, coast);
+  const coastGap = gap(railed.bodyFixedState().position, simulated.bodyFixedState().position);
+  let stopped = true;
+  while (railed.mode === 'flight') stopped = railed.advanceOnRails(20);
+  check('on rails: coasting', coastGap < 1e-3 && !stopped && railed.mode === 'contact' && railed.railsBlocker(0) !== null,
+    `200 s on rails vs physics differ by ${fmt(coastGap)} m; coming down, rails stopped at ${railed.partClearance('upper').toFixed(0)} m in contact, then "${railed.railsBlocker(0)}"`);
+  railed.free(); simulated.free();
 }
 
 if (failures.length > 0) {

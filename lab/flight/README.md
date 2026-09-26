@@ -35,7 +35,7 @@ npm run typecheck
   - Upper stage: 20 kN, Isp 340 s, thrust-to-weight about 1.5, 5.1 km/s, 183 s burn.
   - It takes a gravity turn: climb, then pitch toward the east, which is where the ground's 450 m/s helps.
 - **HUD** is laid out after KSP, in this lab's plain style:
-  - Top left: mission time and time rate (1×, 5×, 20×, 100×, 200×; click or `,`/`.`).
+  - Top left: mission time and time rate (click, or `,`/`.`; see Time warp). Rates above the current limit are dimmed; asking for one, or losing it, says why.
   - Bottom left: the stages, with each part's own fuel and its vacuum Δv (the booster's counts the upper stage it pushes); the next stage is yellow, the burning one green.
   - Bottom centre: throttle, then altitude above speed in one box.
     - Click the altitude's label to switch AGL (above the ground under the rocket) and ALT (above the reference radius).
@@ -47,7 +47,7 @@ npm run typecheck
 - **Controls** are the landing lab's:
   - `Space` stages, `Shift`/`Ctrl` throttle, `X` cuts.
   - `WASDQE` steer, `P` pauses, `R` resets.
-- **Log.** The dev server logs each session to `lab-log/flight.jsonl`: once per second the mode, altitude, camera distance, map weight, co-rotation, tiles, and frame, physics, LOD and draw times, plus focus changes and resets.
+- **Log.** The dev server logs each session to `lab-log/flight.jsonl`: once per second the time rate, mode, altitude, camera distance, map weight, co-rotation, tiles, and frame, physics, LOD and draw times, plus focus changes and resets.
 
 ## LOD profiling
 
@@ -64,13 +64,21 @@ The **Draw terrain (profiling)** checkbox in the dev panel hides terrain draws w
 - Co-rotating the camera about the spin axis keeps it fixed to the tilted planet's ground (6 hours, drift 4e-15).
 - The map path's inertial trajectory is the same coast as the landing lab's body-fixed forecast (to 5e-10 m) and ends at the impact.
 
+## Time warp
+
+One row of rates, after KSP's two warps but without showing two modes: 1×, 2×, 4×, 5×, 20×, 100×, 1k×, 10k×, 100k×.
+
+- **1× to 4×: physics.** Everything is simulated, Rapier near the ground included, and the engine may burn and the rocket steer. Near the ground a Rapier step (1/60 s) costs about 0.5 ms, so 4× is about 2 ms a frame.
+- **5× and up: on rails** (lab/landing's `advanceOnRails`). Flight parts coast on the orbit propagator, their attitude held and spin stopped. Parts asleep on the ground (Rapier's own rest test) stay where they are. Steering keys do nothing.
+- **Limits.** Each frame the highest allowed rate is worked out, and a higher one drops to it at once:
+  - An engine firing, or any part awake near the ground (settling, sliding, or just coming down into the contact band), holds the rate at 4×.
+  - Dropping from an on-rails rate to a lower on-rails rate steps down to it. Dropping out of on-rails goes straight to 1×, so there is time to react.
+  - The lowest part in orbital flight caps the on-rails rate by its clearance: 5× from 0.001 R, 20× from 0.0015 R, 100× from 0.002 R, 1k× from 0.01 R, 10k× from 0.05 R, 100k× from 0.2 R. On Aurelia that is 6.4 km, 9.6 km, 12.7 km, 64 km, 319 km and 1,274 km. These are first guesses: the ground under the rocket, tile builds and the catch at the band all have to keep up.
+  - A rocket asleep on the ground has no altitude limit: on the pad, 100k× runs a day in under a second.
+- A coast coming down stops on rails where it enters the contact band. Entering it (building the Rapier world and its terrain colliders) costs one frame of about 140 ms, as it does at physics rates.
+- Tile builds do not keep up at high rates (see lab/view: about 10 new tiles per simulated second at 100 km), so the ground stays coarse until they catch up.
+
 ## Not here yet
 
-- **Time warp.** The rate goes up to 200× (for watching day and night, most of all on `aurelia-fast`), but with no on-rails mode and no limit by altitude:
-  - In orbital flight the propagation is cheap, under 1 ms a frame at 200×.
-  - In contact (on or near the ground), Rapier steps at 1/60 s cost about 0.5 ms each. That is 48 ms a frame at 100× and 94 ms at 200×.
-  - A frame advances at most 50 ms of wall time. So near the ground the simulated rate falls far below the chosen one, around 30× at 200×.
-  - Tile builds do not keep up at high rates (see lab/view: about 10 new tiles per simulated second at 100 km), so the ground stays coarse until they catch up.
-  - A real warp needs on-rails parts near the ground and a warp limit by altitude.
 - **Map interaction:** manoeuvre nodes and the flight plan (lab/orbit has them).
 - Atmosphere, terrain on other bodies, docking.

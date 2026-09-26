@@ -32,6 +32,7 @@ export function serveTileBuilds<SurfaceConfig>(makeSampler: (surface: SurfaceCon
       data.positions.buffer as ArrayBuffer,
       data.normals.buffer as ArrayBuffer,
       data.colors.buffer as ArrayBuffer,
+      data.heights.buffer as ArrayBuffer,
       data.grid.buffer as ArrayBuffer,
     ]);
   };

@@ -1,0 +1,22 @@
+html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+#app canvas { display: block; }
+.panel {
+  position: fixed; top: 10px; left: 10px; width: 300px; padding: 10px 12px;
+  background: rgba(8, 12, 20, 0.78); border: 1px solid rgba(140, 180, 220, 0.25); border-radius: 6px;
+  color: #cfe3f5; font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; user-select: none;
+}
+.panel .title { font-weight: 700; letter-spacing: 0.08em; color: #fff; margin-bottom: 6px; }
+.panel pre { margin: 0 0 8px; white-space: pre-wrap; color: #9fd3ff; }
+.panel label { display: block; margin: 4px 0; }
+.panel input[type=range] { width: 100%; }
+.panel select { background: #0d1522; color: #cfe3f5; border: 1px solid #34506b; }
+.panel .toggles { display: flex; gap: 10px; margin: 6px 0; }
+.panel .toggles label { display: inline; }
+.panel .presets { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.panel .presets span { padding: 2px 7px; border: 1px solid #34506b; border-radius: 3px; cursor: pointer; }
+.panel .presets span:hover { background: #1b2c40; }
+.panel .help { color: #7f97ad; }
+.panic {
+  position: fixed; inset: 12px; z-index: 9999; overflow: auto; margin: 0; padding: 20px;
+  background: #260d14; color: #ffe0e5; white-space: pre-wrap; font: 12px/1.4 ui-monospace, monospace;
+}
