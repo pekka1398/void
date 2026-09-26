@@ -111,6 +111,7 @@ let frozen = false;
 let lodDistanceScale: number = preset.initialDistanceScale;
 let horizonCulling: boolean = preset.debug.horizonCulling;
 let cameraLod: boolean = preset.debug.cameraLod;
+let minObserverCellPixels: number = preset.lodCamera.minObserverCellPixels;
 let selection: LodSelection | undefined;
 const panel = new DebugPanel(root, {
   onPreset: (nextId) => {
@@ -128,7 +129,8 @@ const panel = new DebugPanel(root, {
   onCameraLod: (value) => { cameraLod = value; },
   onHorizonCulling: (value) => { horizonCulling = value; },
   onLodDistanceScale: (value) => { lodDistanceScale = value; },
-}, lodDistanceScale, preset.debug, presetId as PlanetPresetId);
+  onMinObserverCellPixels: (value) => { minObserverCellPixels = value; },
+}, lodDistanceScale, minObserverCellPixels, preset.debug, presetId as PlanetPresetId);
 
 const resize = () => {
   const width = Math.max(1, root.clientWidth);
@@ -203,7 +205,7 @@ async function reportBench(results: readonly BenchScenarioResult[]): Promise<voi
     gpu: gl && debugInfo ? String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)) : null,
     timerQuery: !!backend.disjoint, multiDraw: renderer.hasFeature('WEBGL_multi_draw'), pixelRatio: renderer.getPixelRatio(),
     canvas: [renderer.domElement.width, renderer.domElement.height], workers: workers.workerCount,
-    antialias, cameraLod, horizonCulling, lodDistanceScale, results,
+    antialias, cameraLod, horizonCulling, lodDistanceScale, minObserverCellPixels, results,
   };
   console.log('lod-bench', report);
   const response = await fetch('/__lab-log/lod-bench', { method: 'POST', body: `${JSON.stringify(report)}\n` });
@@ -246,7 +248,8 @@ async function renderFrame(now: number): Promise<void> {
   if (!frozen || !selection || benchFrame) {
     selection = lod.select({
       observerPositions: [probePosition],
-      camera: cameraLod ? { position: pose.position, ...preset.lodCamera } : undefined,
+      camera: cameraLod ? { ...preset.lodCamera, position: pose.position, minObserverCellPixels,
+        focalPixels: Math.max(1, renderer.domElement.clientHeight) / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) } : undefined,
       distanceScale: lodDistanceScale,
       horizonCulling,
     });

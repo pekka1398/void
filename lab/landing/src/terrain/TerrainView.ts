@@ -1,5 +1,5 @@
 import type { Vec3 } from '../orbitCore';
-import { PlanetLod, TileRenderer, TileWorkerPool, type LodSelection, type PlanetLodOptions } from '../lodCore';
+import { PlanetLod, TileRenderer, TileWorkerPool, type LodCamera, type LodSelection, type PlanetLodOptions } from '../lodCore';
 import type { ContactWorldOptions } from '../physics/ContactWorld';
 import type { TerrainConfig } from './TerrainConfig';
 import type { Terrain } from './Surface';
@@ -52,10 +52,11 @@ export class TerrainView {
 
   /**
    * Observers (the rocket parts, lab/lod's probe) and the render origin in body-fixed metres.
-   * Horizon culling follows lab/lod: a tile is hidden when it is below every observer's horizon.
+   * Horizon culling follows lab/lod: with a camera, a tile is hidden when it is below the camera's
+   * horizon; without one, when it is below every observer's horizon.
    */
-  update(observers: readonly Vec3[], renderOrigin: Vec3): LodSelection {
-    const selection = this.lod.select({ observerPositions: observers, distanceScale: 1, horizonCulling: true });
+  update(observers: readonly Vec3[], renderOrigin: Vec3, camera?: LodCamera): LodSelection {
+    const selection = this.lod.select({ observerPositions: observers, camera, distanceScale: 1, horizonCulling: true });
     const queueStarted = performance.now();
     this.workers.setWanted(selection.requests);
     const syncStarted = performance.now();

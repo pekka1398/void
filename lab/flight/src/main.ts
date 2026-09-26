@@ -108,6 +108,11 @@ scene.add(sunLight);
 const bodyFixedGroup = new THREE.Group();
 scene.add(bodyFixedGroup);
 const terrainView = new TerrainView(terrain, planet.terrainConfig, rocket.options.contact, Math.max(1, navigator.hardwareConcurrency - 1), (e) => panic(e));
+// lab/lod's camera LOD: the same split table, stopping one level above the collision level (about
+// twice its cell size), so ground far from the rocket does not grow a second collision-level region.
+// The rocket's own detail stops where its cells would be under 2 px on screen; collision terrain is
+// built separately and is not affected.
+const CAMERA_LOD = { distanceScale: 1, maxLevel: Math.max(0, terrainView.lod.options.maxLevel - 1), minObserverCellPixels: 2 } as const;
 bodyFixedGroup.add(terrainView.tiles.group);
 terrainView.tiles.group.visible = terrainVisibleInput.checked;
 terrainVisibleInput.addEventListener('change', () => { terrainView.tiles.group.visible = terrainVisibleInput.checked; });
@@ -305,12 +310,15 @@ function frameLoop(nowMs: number): void {
     const axes = bodyOrientation(home, t);
     const toRender = bodyFixedToRender(axes);
     bodyFixedGroup.quaternion.set(toRender.x, toRender.y, toRender.z, toRender.w);
-    // lab/lod's observers: every live part (the probe). Tiles are placed relative to the render origin.
+    // lab/lod's observers: every live part (the probe), plus the camera, which also alone decides
+    // horizon culling. Tiles are placed relative to the render origin.
+    const cameraPosition = { x: origin.x + cameraOffset.x, y: origin.y + cameraOffset.y, z: origin.z + cameraOffset.z };
     const bodyFixed = (p: Vec3) => lander.frame.toBodyFixed(t, { position: p, velocity: { x: 0, y: 0, z: 0 } }).position;
     const observers = liveParts().map((which) => lander.partState(which).position);
     const lodStarted = performance.now();
     const renderOrigin = bodyFixed(origin);
-    const selection = terrainView.update(observers, renderOrigin);
+    const focalPixels = window.innerHeight / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+    const selection = terrainView.update(observers, renderOrigin, { position: bodyFixed(cameraPosition), focalPixels, ...CAMERA_LOD });
     timePhase('select', selection.selectMilliseconds);
     timePhase('traverse', selection.traversalMilliseconds);
     timePhase('balance', selection.balanceMilliseconds);

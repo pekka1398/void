@@ -3,7 +3,7 @@
 //   npm run bench                        table of all scenarios, both build models
 //   npm run bench -- --json > run.json   the same results as JSON instead
 import { PlanetLod, type LodCamera, type LodSelection } from './src/lod';
-import { LANDING_TEST_PLANET } from './src/app/PlanetPresets';
+import { HEADLESS_FOCAL_PIXELS, LANDING_TEST_PLANET } from './src/app/PlanetPresets';
 import { tileId, type TileKey } from './src/lod/TileKey';
 import type { TileMeshData } from './src/lod/TileMeshBuilder';
 import { BENCH_SCENARIOS, type BenchFrame, type BenchScenario } from './src/app/BenchScenarios';
@@ -33,7 +33,7 @@ function newLod(): PlanetLod {
 }
 
 function select(lod: PlanetLod, frame: BenchFrame): LodSelection {
-  const camera: LodCamera = { position: frame.camera, ...p.lodCamera };
+  const camera: LodCamera = { position: frame.camera, focalPixels: HEADLESS_FOCAL_PIXELS, ...p.lodCamera };
   return lod.select({ observerPositions: [frame.probe], camera, distanceScale: 1, horizonCulling: true });
 }
 

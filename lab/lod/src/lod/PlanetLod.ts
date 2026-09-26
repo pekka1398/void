@@ -51,6 +51,15 @@ export interface LodCamera {
   readonly distanceScale: number;
   /** The camera splits no tile at or beyond this level; observers may still. */
   readonly maxLevel: number;
+  /** Viewport height over 2 tan(vertical fov / 2): pixels per meter at one meter of distance. */
+  readonly focalPixels: number;
+  /**
+   * An observer splits a tile only while the children's grid cells would still be
+   * at least this many pixels at the tile's nearest point to the camera. Detail
+   * the camera cannot resolve is not built or drawn; the camera's own split test
+   * is not limited by it.
+   */
+  readonly minObserverCellPixels: number;
 }
 
 export interface LodView {
@@ -218,7 +227,9 @@ export class PlanetLod {
       const { position } = camera;
       if (!Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z) ||
         !Number.isFinite(camera.distanceScale) || camera.distanceScale <= 0 ||
-        !Number.isInteger(camera.maxLevel) || camera.maxLevel < 0 || camera.maxLevel > this.options.maxLevel) {
+        !Number.isInteger(camera.maxLevel) || camera.maxLevel < 0 || camera.maxLevel > this.options.maxLevel ||
+        !Number.isFinite(camera.focalPixels) || camera.focalPixels <= 0 ||
+        !Number.isFinite(camera.minObserverCellPixels) || camera.minObserverCellPixels < 0) {
         throw new Error(`PlanetLod.ts select: invalid camera=${JSON.stringify(camera)}; maxLevel=${this.options.maxLevel}; frame=${this.frame}`);
       }
     }
@@ -252,25 +263,30 @@ export class PlanetLod {
     /**
      * Largest threshold - distance over the observers and the camera; positive
      * means split. A zero threshold (a level nobody may split) still ranks
-     * requests by distance.
+     * requests by distance. With a camera, the observers' threshold is zero once
+     * the children's cells would be smaller than minObserverCellPixels on screen.
      */
     const splitMargin = (node: LodNode) => {
       const level = node.key.level;
-      let threshold = level < this.options.maxLevel
+      const tableThreshold = level < this.options.maxLevel
         ? this.options.radiusMeters * this.options.splitDistanceRatios[level]! * view.distanceScale : 0;
+      let threshold = tableThreshold;
       let distance = Number.POSITIVE_INFINITY;
       for (const observer of view.observerPositions) distance = Math.min(distance, patchDistance(node, observer));
-      let margin = threshold - distance;
       if (camera) {
-        const cameraThreshold = level < camera.maxLevel ? threshold * camera.distanceScale : 0;
         const cameraDistance = patchDistance(node, camera.position);
+        const childCellPixels = this.spacingMeters(level + 1) * camera.focalPixels / cameraDistance;
+        if (childCellPixels < camera.minObserverCellPixels) threshold = 0;
+        let margin = threshold - distance;
+        const cameraThreshold = level < camera.maxLevel ? tableThreshold * camera.distanceScale : 0;
         if (cameraThreshold - cameraDistance > margin) {
           margin = cameraThreshold - cameraDistance;
           distance = cameraDistance;
           threshold = cameraThreshold;
         }
+        return { margin, distance, threshold };
       }
-      return { margin, distance, threshold };
+      return { margin: threshold - distance, distance, threshold };
     };
 
     const visit = (node: LodNode) => {

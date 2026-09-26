@@ -3,7 +3,7 @@ import { HOLMAN_SPLIT_DISTANCE_RATIOS, PlanetLod, buildTileMesh, buildTileIndice
 import { DEMO_MAX_HEIGHT_METERS, DEMO_RADIUS_METERS, sampleDemoSurface, samplePlanetSurface } from './src/app/DemoSurface';
 import { OrbitCamera } from './src/app/OrbitCamera';
 import { SphericalProbe } from './src/app/SphericalProbe';
-import { LANDING_TEST_PLANET } from './src/app/PlanetPresets';
+import { HEADLESS_FOCAL_PIXELS, LANDING_TEST_PLANET } from './src/app/PlanetPresets';
 import { tileId, type CubeFace, type TileKey } from './src/lod/TileKey';
 import type { TileMeshData } from './src/lod/TileMeshBuilder';
 
@@ -509,7 +509,9 @@ console.log('tiles built total', built, 'cached', lod.cachedTileCount, 'nodes', 
   ];
   const summaries: string[] = [];
   for (const { name, camera } of cases) {
-    const withCamera = settle({ observerPositions: [probe], camera: { position: camera, ...lodCamera }, distanceScale: 1, horizonCulling: true });
+    // The pixel limit is off here: these cases test visibility and the camera's own cap.
+    const withCamera = settle({ observerPositions: [probe], distanceScale: 1, horizonCulling: true,
+      camera: { ...lodCamera, position: camera, focalPixels: HEADLESS_FOCAL_PIXELS, minObserverCellPixels: 0 } });
     const probeOnly = settle({ observerPositions: [probe], distanceScale: 1, horizonCulling: true });
     const seen = uncovered(withCamera.render, camera);
     const before = uncovered(probeOnly.render, camera);
@@ -531,6 +533,35 @@ console.log('tiles built total', built, 'cached', lod.cachedTileCount, 'nodes', 
     }
   }
   console.log(`camera LOD:\n  ${summaries.join('\n  ')}`);
+
+  // The pixel limit: from a camera straight above the probe, the probe's detail stops at the
+  // level whose children's cells would be under minObserverCellPixels at the camera's distance.
+  const minPixels = lodCamera.minObserverCellPixels;
+  const spacing = (level: number) => p.radiusMeters * (Math.PI / 2) / 2 ** level / (p.tileResolution - 1);
+  const limited: string[] = [];
+  let previousLevel = Infinity;
+  let previousDrawn = Infinity;
+  for (const height of [50, 3_000, 300_000, 3 * p.radiusMeters]) {
+    const camera = { x: top + height, y: 0, z: 0 };
+    const selection = settle({ observerPositions: [probe], distanceScale: 1, horizonCulling: true,
+      camera: { ...lodCamera, position: camera, focalPixels: HEADLESS_FOCAL_PIXELS, minObserverCellPixels: minPixels } });
+    const underProbe = levelUnder(selection.render, probe);
+    // The probe tile's patch distance to the camera is the height: the probe is at the top of the
+    // surface band, straight below the camera.
+    let want = 0;
+    while (want < p.maxLevel && spacing(want + 1) * HEADLESS_FOCAL_PIXELS / height >= minPixels) want++;
+    const cameraLevel = levelUnder(settle({ observerPositions: [probe], distanceScale: 1, horizonCulling: true,
+      camera: { ...lodCamera, position: camera, focalPixels: HEADLESS_FOCAL_PIXELS, minObserverCellPixels: 1e9 } }).render, probe);
+    want = Math.max(want, cameraLevel);
+    check(underProbe === want, `pixel limit at ${height} m: level under the probe L${underProbe}; want L${want} (camera alone L${cameraLevel})`);
+    check(underProbe <= previousLevel && selection.render.length <= previousDrawn, `pixel limit at ${height} m: detail grew with distance`);
+    check(selection.balanceCollapses.length === 0, `pixel limit at ${height} m: settled selection collapsed ${selection.balanceCollapses.length} times`);
+    previousLevel = underProbe;
+    previousDrawn = selection.render.length;
+    limited.push(`${height} m: under probe L${underProbe} (${(spacing(underProbe) * HEADLESS_FOCAL_PIXELS / height).toFixed(1)} px/cell), drawn=${selection.render.length}`);
+  }
+  check(previousLevel < p.maxLevel, 'pixel limit: the distant camera still drew the probe at full detail');
+  console.log(`camera pixel limit (${minPixels} px, focal ${HEADLESS_FOCAL_PIXELS.toFixed(0)} px):\n  ${limited.join('\n  ')}`);
 }
 
 // Direction -> face parameters -> tile, used by callers that stream tiles around a point.

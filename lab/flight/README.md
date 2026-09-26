@@ -22,7 +22,7 @@ npm run typecheck
 - **Rendering.** Everything is in the inertial ecliptic frame, relative to the upper stage, with float64 subtraction on the CPU and a logarithmic depth buffer.
   - Tiles and rocket attitudes are body-fixed. They are turned into the scene by the planet's current orientation (`FlightFrame.bodyFixedToRender`).
   - The Sun lights the scene from its real direction, and a little ambient light keeps the night side flyable.
-- **Terrain observers.** lab/lod's observers are every live part; the camera does not affect LOD selection. Near the rocket, drawn terrain equals collision terrain.
+- **Terrain observers.** lab/lod's observers are every live part, plus the camera (lab/lod's `LodCamera`). The camera splits tiles with the same table, stopping one level above the collision level, and is the only horizon for culling, so from far out the planet's face toward the camera is drawn. The rocket's own detail stops where its cells would be under 2 px on screen (lab/lod's pixel limit): with the camera near the rocket, drawn terrain equals collision terrain, and zoomed out the drawn ground coarsens while collision terrain, built separately, does not.
 - **Camera.** This is lab/view's `OrbitCamera` and `viewState`, in single mode:
   - On the pad, the camera turns with the ground. In flight above about 25–76 km on Aurelia (0.004–0.012 R) it is inertial.
   - Zooming out from about 127 km to 1,270 km fades in the map: orbits, labels, the rocket's forecast path and its Pe/Ap.

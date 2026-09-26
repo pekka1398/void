@@ -13,6 +13,7 @@ export interface DebugPanelHandlers {
   onCameraLod(enabled: boolean): void;
   onHorizonCulling(enabled: boolean): void;
   onLodDistanceScale(scale: number): void;
+  onMinObserverCellPixels(pixels: number): void;
 }
 
 export interface DebugStats {
@@ -69,8 +70,11 @@ export class DebugPanel {
   private readonly presetSelect = document.createElement('select');
   private readonly errorInput = document.createElement('input');
   private readonly errorLabel = document.createElement('span');
+  private readonly pixelInput = document.createElement('input');
+  private readonly pixelLabel = document.createElement('span');
 
   constructor(parent: HTMLElement, private readonly handlers: DebugPanelHandlers, initialLodDistanceScale: number,
+    initialMinObserverCellPixels: number,
     initialDebug: { readonly meshWireframe: boolean; readonly tileBoundaries: boolean; readonly skirts: boolean;
       readonly cameraLod: boolean; readonly horizonCulling: boolean; readonly colorMode: TileColorMode }, presetId: PlanetPresetId) {
     this.toggles = [
@@ -142,6 +146,17 @@ export class DebugPanel {
     this.root.append(errorRow);
     this.applyLodDistanceScale();
 
+    const pixelRow = document.createElement('label');
+    this.pixelInput.type = 'range';
+    this.pixelInput.min = '0';
+    this.pixelInput.max = '8';
+    this.pixelInput.step = '0.5';
+    this.pixelInput.value = String(initialMinObserverCellPixels);
+    this.pixelInput.addEventListener('input', () => this.applyMinObserverCellPixels());
+    pixelRow.append('Probe min cell ', this.pixelInput, ' ', this.pixelLabel, ' ', key('Comma'), key('Period'));
+    this.root.append(pixelRow);
+    this.applyMinObserverCellPixels();
+
     const help = document.createElement('div');
     help.className = 'lod-help';
     help.textContent = 'Left drag: pan · Right drag: orbit planet center · Shift + left: look/tilt · Wheel: zoom · Drag along colored probe arrows: r / θ / φ';
@@ -162,6 +177,9 @@ export class DebugPanel {
     } else if (code === 'BracketLeft' || code === 'BracketRight') {
       this.errorInput.value = String(Number(this.errorInput.value) + (code === 'BracketLeft' ? -0.25 : 0.25));
       this.applyLodDistanceScale();
+    } else if (code === 'Comma' || code === 'Period') {
+      this.pixelInput.value = String(Number(this.pixelInput.value) + (code === 'Comma' ? -0.5 : 0.5));
+      this.applyMinObserverCellPixels();
     }
   }
 
@@ -209,11 +227,18 @@ export class DebugPanel {
     this.errorLabel.textContent = `${scale.toFixed(2)}×`;
     this.handlers.onLodDistanceScale(scale);
   }
+
+  /** 0 turns the limit off: the probe's detail is built however small it is on screen. */
+  private applyMinObserverCellPixels(): void {
+    const pixels = Number(this.pixelInput.value);
+    this.pixelLabel.textContent = pixels === 0 ? 'off' : `${pixels.toFixed(1)} px`;
+    this.handlers.onMinObserverCellPixels(pixels);
+  }
 }
 
 function key(code: string): HTMLElement {
   const element = document.createElement('kbd');
-  element.textContent = code.replace(/^Key/, '').replace('BracketLeft', '[').replace('BracketRight', ']');
+  element.textContent = code.replace(/^Key/, '').replace('BracketLeft', '[').replace('BracketRight', ']').replace('Comma', ',').replace('Period', '.');
   return element;
 }
 

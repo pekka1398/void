@@ -21,10 +21,14 @@ export const SEAM_TEST_PLANET = {
     maxDistanceRadii: 31,
     fovDegrees: 60,
   },
-  /** The viewing camera's split test: the same distance table, scaled, and capped at a level. */
+  /**
+   * The viewing camera's split test: the same distance table, scaled, and capped at a level.
+   * The probe's detail stops where its cells would be under minObserverCellPixels on screen.
+   */
   lodCamera: {
     distanceScale: 1,
     maxLevel: 13,
+    minObserverCellPixels: 2,
   },
   probe: {
     initialRadiusRadii: 1.35,
@@ -117,3 +121,6 @@ export function planetPreset(id: string): PlanetPreset {
   }
   return PLANET_PRESETS[id as PlanetPresetId];
 }
+
+/** Focal length of a 1000 px tall viewport at the presets' 60° field of view, for headless selection. */
+export const HEADLESS_FOCAL_PIXELS = 500 / Math.tan(Math.PI / 6);
