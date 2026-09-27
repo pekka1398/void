@@ -4,16 +4,19 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check": "tsx lab/flight/flight-check.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.20.0",
     "three": "0.185.1"
   },
   "devDependencies": {
+    "@types/node": "^24.13.6",
     "@types/three": "^0.185.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.0",
     "vite": "^7.0.0"
   }

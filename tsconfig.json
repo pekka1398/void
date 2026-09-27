@@ -3,12 +3,24 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
     "isolatedModules": true,
-    "types": ["vite/client"]
+    "noUncheckedIndexedAccess": true,
+    "types": [
+      "vite/client",
+      "node"
+    ]
   },
-  "include": ["src"]
+  "include": [
+    "src",
+    "lab/flight/flight-check.ts",
+    "vite.config.ts"
+  ]
 }

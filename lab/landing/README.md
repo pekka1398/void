@@ -26,9 +26,9 @@ npm run dev        # interactive page
 - `aurelia`: the orbit lab's Earth analogue inside its full sol system, with the Sun, the planets and Selene, a 23.4° axial tilt, and terra's placeholder hills. It is the first planet that is not alone: the rocket stands on body `bodyIndex` of a many-body ephemeris, and the rotating frame carries the Sun's and Selene's tides. `planetEphemeris(planet)` builds any planet's ephemeris and returns its index. A lone planet steps one minute; a system uses the orbit lab's suggested step. The per-planet launch-and-return and drawn-equals-collision checks cover it like the others.
 - `aurelia-fast`: Aurelia spinning ten times faster, a 2.4 h day, to make the rotating frame plain to see. At the launch site the ground moves 4.5 km/s and the centrifugal pull is about a third of gravity. Everything else, including J2, is the sol preset's.
 
-## Shared with lab/flight
+## Shared with the main game and lab/flight
 
-lab/flight imports these instead of copying them:
+The main game in the repository's root `src/` imports these instead of copying them. lab/flight runs the same game entry point:
 
 - `vessel/DemoRocket.ts`: the two-stage rocket's collider shapes, masses and contact options, sized to the planet.
 - `render/RocketVisual.ts`: its meshes, engine plumes and collider outlines.

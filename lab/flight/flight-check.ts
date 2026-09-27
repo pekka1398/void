@@ -1,10 +1,10 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
-import { bodyOrientation, cross, DominanceTree, dot, length, normalize, spinAxis, sub, type Vec3 } from './src/orbitCore';
-import { demoRocket, planetById, planetEphemeris, predictCoast, PartJointRocket, type LanderControl } from './src/landingCore';
+import { bodyOrientation, cross, DominanceTree, dot, length, normalize, spinAxis, sub, type Vec3 } from '../../src/orbitCore';
+import { demoRocket, planetById, planetEphemeris, predictCoast, PartJointRocket, type LanderControl } from '../../src/landingCore';
 import { OrbitCamera, viewState } from '../view/src/ViewCamera';
-import { bodyFixedToRender, quatMultiply, quatRotate, renderAxes, vesselAxes } from './src/FlightFrame';
-import { navballBasis, toBall } from './src/navballCore';
+import { bodyFixedToRender, quatMultiply, quatRotate, renderAxes, vesselAxes } from '../../src/FlightFrame';
+import { navballBasis, toBall } from '../../src/navballCore';
 
 let failures = 0;
 const normalizeQuat = (q: { x: number; y: number; z: number; w: number }) => {

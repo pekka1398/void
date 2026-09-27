@@ -7,7 +7,7 @@ This is the first integration lab. It connects features that were each built and
 - **lab/navball**: the attitude ball.
 - **lab/view**: the single view. Zooming out from the rocket turns into the map, and the camera turns from the local vertical to the planet's north (see lab/view's decision).
 
-The lab adds no features of its own, only the wiring. It imports those labs' code through `src/orbitCore.ts`, `src/landingCore.ts`, `src/navballCore.ts` and `src/viewCore.ts`. A change a feature needs is made in its own lab, and that lab's checks must keep passing. This is the rehearsal for putting it all together. Whether it later moves into `src/` or becomes the game itself is still open.
+The integration code was promoted to the repository's root `src/` on 2026-09-27 and is now the main game. This lab's `src/main.ts` imports that same entry point; there is no second implementation. The root `src/orbitCore.ts`, `src/landingCore.ts`, `src/navballCore.ts` and `src/viewCore.ts` import the feature labs directly. A change a feature needs is made in its own lab, and that lab's checks must keep passing. Integration wiring and game flow are changed in the root `src/`. `flight-check.ts` checks that root implementation, and the game and this lab share the root Vite configuration.
 
 ```sh
 cd lab/flight

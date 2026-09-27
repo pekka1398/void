@@ -38,7 +38,7 @@ It panics instead of guessing:
 - Everywhere else it uses true north.
 - Crossing close to a pole still swings the heading quickly from 000 to 180; that is real, not a flaw. The latitude slider reaches ±90° to show it.
 
-lab/flight imports it through `src/navballCore.ts`, and its check verifies that the ball's screen axes agree with the steering keys.
+The main game imports it through the repository's root `src/navballCore.ts`. lab/flight runs that same game entry point, and its check verifies that the ball's screen axes agree with the steering keys.
 
 ## Checks
 

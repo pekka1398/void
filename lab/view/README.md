@@ -78,7 +78,7 @@ Everything is in one float64 world, drawn relative to the focus with a logarithm
   - Leaving the map returns the focus to the vessel.
   - Dragging clamps the elevation 0.02 rad from straight up and down, so a long drag stops at the pole.
 
-`ViewCamera.ts` (camera and view state) and `MapLayer.ts` (body spheres, orbit loops, the vessel's path with apsides, and labels) are modules of their own, and lab/flight imports both.
+`ViewCamera.ts` (camera and view state) and `MapLayer.ts` (body spheres, orbit loops, the vessel's path with apsides, and labels) are modules of their own. The main game in the repository's root `src/` imports both; lab/flight runs that same entry point.
 
 The dev server logs each session to `lab-log/view.jsonl`:
 
