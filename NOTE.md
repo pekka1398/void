@@ -18,8 +18,15 @@ WebGPU / compute 待辦（尚未實作）
 
 
 
-
-
+1. lod效能問題 gpu  (okay)
+2. lod 地形問題 自定義地形 (okay)
+3. ui  view切換優化 (okay)
+4. orbit 完整merge進來 (okay)
+5. 給火箭更優越的isp 跟推力 哪怕沒有真實火箭能做到那種程度
+6. 視覺上的 海洋 大氣的shader skybox 星空  (okay)
+7. 審視一下自轉的那個 (okay)
+8. 微調下lod level的超參數配置 (okay)
+9. lod大改 按照tile再螢幕上的佔比 決定level  決定要不要畫細的  (okay)
 
 orbit
 landing 
@@ -30,8 +37,69 @@ shader texture better planet atmosphere ocean better landscape terrian
 human in rocket/ship
 part assembly staging
 
+1. 更好更詳細的行星 地形 海洋大氣 landscape 雲層 極光 群系 天氣
+2. 更好更詳細更多的part 火箭 更多功能什麼降落傘之類
+3. 空氣阻力 動力學 燒蝕 空氣交互 far 空氣升力 飛機
+4. 對接
+5. rcs sas
+6. 存檔管理
 
+- Maneuver nodes: the orbit lab has the flight plan, but flight/view don't have it yet.
+- Atmosphere: scenery only draws it. It has no physical effect, and Aurelia in flight has no air.
+- Attitude: the orbit lab turns the ship instantly. There's no rotational inertia and no reaction wheels (ModuleReactionWheel).
+- Multiple ships: landing's EncounterPhysicsGate only does the range and closest-approach prediction. There's no list of ships and no shared physics world for two ships.
+- Structure: the rocket is one rigid body with no joint flex, so it can't bend or break.
+- Terrain on other bodies: only the home planet has LOD tiles. The other bodies are spheres.
+- Clouds: they don't move, cast no shadows, and don't darken the ground's sky light.
+Flight physics
+- Aerodynamic drag: FlightIntegrator plus DragCube, the six-sided drag table.
+- Lift and aircraft: ModuleLiftingSurface, control surfaces, ModuleResourceIntake (jet engines need air).
+- Heat: reentry heating, heat conduction, ModuleAblator (heat shields), Radiators/, ModuleCoreHeat, parts overheating and exploding.
+- Parachutes (ModuleParachute), landing legs with suspension (ModuleWheels/), wheels, ground vehicles, water buoyancy and splashdown.
+- Engines: gimbal (ModuleGimbal), Isp that changes with air pressure, engines with more than one mode (MultiModeEngine), fuel flow order and crossfeed (ModuleToggleCrossfeed), fuel lines and struts (CompoundParts/).
+- Parts can break off: impact tolerance, structural limits, explosions.
 
+Controls
+- SAS and its hold modes (ModuleSAS): prograde, normal, radial, target, maneuver.
+- RCS (ModuleRCS) and translation controls.
+- Action groups (AG1–10, gear, lights, brakes), trim, precision control mode.
+- Switching between ships, targets, rendezvous display (relative velocity, closest approach).
+- Docking ports (ModuleDockingNode) and the grabbing claw (ModuleGrappleNode): merging two ships into one and splitting them again.
+
+Parts and building (the VAB)
+- The Part/PartModule architecture itself. Your notes already list this as a next step.
+- Attach nodes and surface attach, symmetry (radial and mirror), moving the root part, center of mass/lift/thrust markers.
+- Staging editor, part list with categories and search, subassemblies, saving ships (.craft files).
+- Checks before launch (PreFlightTests/): missing parachutes, blocked engines, and so on.
+- Procedural fairings (ProceduralFairings/), part variants (ModulePartVariants), cargo bays that shield parts (ModuleCargoBay).
+- Parts that deploy with animations: solar panels, antennas, radiators, ladders, lights.
+
+Resources and power
+- Electricity: solar panels, batteries, generators (ModuleGenerator, ModuleAlternator), what happens when power runs out.
+- Other resources: monopropellant, xenon, ore. Mining (ISRU): BaseDrill, ModuleResourceConverter, surface/orbital scanners.
+
+Crew and EVA
+- KerbalEVA: going outside, jetpack, climbing ladders, planting flags (FlagSite), carrying items (ModuleInventoryPart, ModuleCargoPart).
+- Seats (KerbalSeat), crew in capsules, Experience/ (pilot, engineer and scientist traits and levels).
+- IVA (inside-the-cockpit view). Your NOTE has "human in rocket/ship", which fits here.
+
+Game progression
+- Science: experiments, biomes (ModuleScienceExperiment), data transmission, science lab.
+- Tech tree, funds, reputation, facility upgrades.
+- Contracts (Contracts/, FinePrint/: satellites, stations, surveys, rescues), achievements (KSPAchievements).
+- CommNet: antennas, relays, signal delay and control (CommNet/), KerbNet.
+- Space objects: asteroids and comets (ModuleAsteroid, ModuleComet, SentinelMission).
+
+Game systems
+- Saves (quicksave, reverting a flight to launch or to the VAB) and the scene flow: space center → VAB → launchpad → flight → tracking station.
+- Converting saves from older versions (SaveUpgradePipeline), settings screen, key rebinding, localization, KSPedia (in-game encyclopedia).
+- Audio: engine sound that changes with air density, wind noise, explosions, music. The decompile has an audio/ folder you can check.
+- Effects: engine plumes that change with air pressure, reentry flames, dust kicked up on the ground (ModuleSurfaceFX), explosions, camera shake.
+- Debug toolbar (DebugToolbar/: cheats, infinite fuel, teleport). This would help a lot with testing labs.
+
+Expansions (optional)
+- Robotics (Expansions.Serenity: hinges, rotors, pistons, controllers), deployed surface science.
+- Mission editor (Expansions.Missions, from Making History).
 
 
 blackhole

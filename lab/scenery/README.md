@@ -1,6 +1,6 @@
 # Scenery Lab
 
-How the planet looks: the atmosphere, the sea, the stars and the lit ground, on this lab's layered planet, lab/lod's continents or the Aurelia hills lab/flight flies over. Physics is not involved. The camera stands on the ground and can rise to 200,000 km.
+How the planet looks: the atmosphere, the sea, volumetric clouds, the stars and the lit ground, on this lab's layered planet, lab/lod's continents or the Aurelia hills lab/flight flies over. Physics is not involved. The camera stands on the ground and can rise to 200,000 km.
 
 ```sh
 cd lab/scenery
@@ -8,6 +8,7 @@ npm install
 npm run dev        # the page
 npm run check      # headless checks
 npm run typecheck
+npm run check:shader # generate the cloud composite GLSL without a browser
 ```
 
 ## Controls
@@ -17,21 +18,22 @@ npm run typecheck
   - Orbiting slows the same way, at most lab/lod's 0.005 rad per pixel.
   - The view can tilt past the horizon to nearly straight up. The camera never goes below 1.5 m.
 - **Time.** *Local time* is the solar time where the camera stands. *Time rate* runs it. *Sun declination* sets the season.
-- **Toggles.** *Sea level*, *exposure* and *tone mapping* can be changed live, and the atmosphere, its multiple scattering, the ocean and the stars can each be switched off.
+- **Toggles.** *Sea level*, *exposure* and *tone mapping* can be changed live, and the atmosphere, its multiple scattering, clouds, the ocean and the stars can each be switched off. *Cloud coverage* adjusts the weather threshold (it is not a literal percentage); *weather only* removes local 3D noise to inspect the global distribution.
 - **Terrain.** Three choices; changing it reloads the page. `?terrain=layered` (default) is this lab's own planet (below). `?terrain=lod` is lab/lod's continents. `?terrain=hills` is lab/landing's Aurelia hills, which lab/flight uses.
 - **Start point.** `?at=latitude,longitude` (degrees) sets the spot the camera starts over, for example `?at=22.5,-142`, the layered planet's highest range.
-- **Presets.** Over the current spot, these jump to a height, pitch and time: ground at 10:00, sunset toward the west, night, 10 km, 400 km, and 20,000 km looking straight down.
+- **Presets.** Over the current spot, these jump to a height, pitch and time: ground at 10:00, sunset toward the west, night, the cloud layer at 3 km above sea level (raised if terrain is higher), 10 km, 400 km, and 20,000 km looking straight down.
 
 ## How it is drawn
 
 Render space is the planet's body-fixed axes with the camera at the origin. The sun moves, and the planet does not turn. The sky is turned with the sun.
 
 1. **Scene pass.** The scene is drawn into a half-float target with logarithmic depth. It holds lab/lod's tiles in `GroundMaterial` and the stars.
-2. **Composite pass** (`AtmosphereShading.composite`). For every pixel it reads the depth, finds the ray's stretch inside the air (up to what was drawn, the ground sphere, or the top of the air) and marches it in 32 steps. The steps crowd toward the camera.
-   - The scene colour is dimmed by the air's transmittance.
-   - Light the air scatters toward the camera is added: Rayleigh and Mie, each with a phase function, sunlit through the transmittance table.
-   - The sun's limb-darkened disc is added to sky pixels.
-   - Tone mapping and sRGB come last.
+2. **Transport pass** (`AtmosphereShading.transport`, `SceneryPipeline`). At the same full resolution as the scene, regardless of camera motion, it reads scene depth and integrates air and clouds together in depth order. Cloud-shell intersections split each ray into at most five intervals, with 48 steps in cloud intervals below 100 km camera altitude, 24 farther away, and 32 in clear-air intervals. With clouds disabled or coverage at zero, it uses the original 32-step air march. Two half-float attachments store scattered light with a logarithmic scene-depth guide, and RGB transmission.
+3. **Resolve pass.** Each full-resolution transport pixel directly supplies light and transmission for the matching scene pixel. The scene and sun disc are multiplied by transmission, then scattered light is added. Tone mapping and sRGB come last. There is no motion-dependent resolution switch, upsampling or delayed refinement frame. Canvas clicks without camera motion do not invalidate a settled frame.
+
+**Render budget.** Drawing resolution is capped at 1920×1080 with DPR at most 1, frame rate at 30 fps, and terrain construction at two workers. Hidden tabs do not render. At heights above 20 km, a stopped clock and settled terrain render after interaction or a completed tile, using full-resolution transport for every rendered frame; near the surface the ocean remains animated. The panel reports the actual WebGL GPU and rendered-frame count. On Linux hybrid graphics, GPU selection belongs to browser launch, not the page.
+
+Nested transport loops use distinct GLSL indices (`cloudSegment`, `viewStep`, `shadowStep`). Reusing Three's default `i` caused outer-segment expressions to use inner sample indices, marching outside the intended intervals and falsely illuminating the night side. `check:shader` verifies that generated loop names remain unique; browser regression checks include a fully dark orbital view with air, clouds and multiple scattering enabled. All atmosphere LUT reads explicitly use level 0: implicit derivative-based sampling inside divergent marching loops produced screen-horizontal bands on the tested GPU. Shader generation also checks that scene depth is the only remaining implicit-LOD sampler.
 
 ### Atmosphere (`src/Atmosphere.ts`)
 
@@ -51,7 +53,22 @@ Render space is the planet's body-fixed axes with the camera at the origin. The 
   The sky pass adds `σ_s · Ψ` as an isotropic source at every step. It brightens the noon zenith by about 60% (blue) and the twilight sky 2.4×.
 - **Sky irradiance.** A 32×16 table of the light the whole sky (multiple scattering included, without the sun's beam) casts on level ground. It is integrated over 64 hemisphere directions and is within 2% of 512.
 - **Start-up cost.** All three tables are built on the CPU at start-up, in about 0.6 s in the browser. The page shows the time.
-- **Not modelled yet.** There are no clouds.
+
+### Volumetric clouds (`src/CloudField.ts`, `src/CloudNodes.ts`)
+
+Weather and volume stages are implemented, with full-resolution transport; the frame cap and on-demand rendering limit GPU load.
+
+- **One field from ground to orbit.** A body-fixed shell starts 1.5 km above the live sea level and ends at 8 km. Weather and horizontally anchored banks set a local domed top below 8 km. The base stays level, gaps between banks remain clear, and local shape thresholds tighten with height. The density does not depend on terrain tiles or their LOD; a camera can cross the shell continuously.
+- **Weather.** A 2048×1024 spherical atlas stores humidity and cloud type from domain-warped continuous 3D noise at continental and regional scales, modulated by latitude. Longitude wraps and the pole rows are constant. It does not yet reuse terrain moisture or model moving fronts. At the default setting, 63% of 6,000 equal-area directions have substantial weather coverage; about 51% of sampled columns contain local volume density.
+- **Shape.** A repeating 64³ Perlin–Worley volume spans 65.536 km, with a second sample at 1,048.576 km for coherent banks that survive distant filtering. A low-frequency Perlin channel supplies the regional envelope, mixed with weaker cell structure; humid systems blend local cells into continuous sheets. A 32³ Worley erosion volume spans 2.048 km. A smooth vertical profile flattens the base and thins the top, while both the broad bank sample and local shape vary the top, and the local shape contracts with height. Both have mipmaps; sampling levels follow twice the ray-step or projected-pixel footprint to respect the sampling limit, and fine erosion fades when unresolved. The projected-pixel footprint uses the scene resolution and does not change when a drag starts or ends. Between 2 and 16 km footprints, thresholded local shape blends to a smooth coverage moment; this approximates subpixel coverage rather than thresholding the averaged noise. Sun-shadow samples use the same minimum footprint, preventing unresolved shadow noise from speckling distant tops.
+- **Precision.** The CPU sends camera positions modulo each noise period. Near-camera heights use `(r² − R²)/(r + R)` with a CPU-supplied altitude; orbital heights use the planet-sized body-fixed vector. Orbital ray intersections use closest approach to the centre, avoiding cancellation of huge squared distances.
+- **Light.** Atmospheric transmittance colours the sunlight and sky irradiance supplies ambient light. Five expanding samples estimate sun-ray cloud optical depth, capped at 120 km. A three-order approximation reduces anisotropy and optical depth for successive scattering orders, with a diffuse tail for higher orders. Cloud extinction is 0.0011 m⁻¹ at unit density; ambient and higher-order light attenuate inside thick banks to retain shadow contrast. This is not an exact cloud multiple-scattering solution.
+- **Composition.** Cloud extinction and scattering enter the same Beer–Lambert integral as the air. Scene depth clips the volume at terrain or other scene geometry, and the same accumulated transmission dims the sun and stars. Very opaque rays stop accumulating below transmission 0.003.
+- **Start-up.** Weather and noise take about 1.5 s on the tested browser, separately reported from sky-table building.
+- **Browser checks.** Tested in Edge scenery tabs at ground, 3 km inside the layer, 10 km, 400 km and 20,000 km, plus sunset and zero coverage. No captured console errors or warnings. Cloud tops and interiors are visible. Orbital cloud edges and unresolved shadow speckle were revised after visual review; domed tops and clear bank gaps were additionally checked at 10 km and inside the layer; the coverage-moment and diffuse-light approximations still need tuning, and the far view still lacks temporal detail reconstruction.
+- **Next stage.** GPU timing, temporal reprojection to recover cloud detail, and ground cloud shadows. Currently clouds are static, cast no shadows on terrain, and do not reduce the ground's sky irradiance. The atmosphere's multiple-scattering tables remain clear-sky tables. This has not been integrated into flight.
+
+`npm run check:shader` bundles Three's source modules with its GLSL builder, builds the actual transport and resolve node graphs, and writes vertex/fragment GLSL into a temporary directory. It checks node generation; it does not create a graphics context. The generated shaders were additionally compiled and linked in an OpenGL ES 3 context during development.
 
 ### Layered terrain (`src/LayeredTerrain.ts`)
 
@@ -136,3 +153,10 @@ A 33×33 tile takes about 3 ms to build in Node.
   - Plains are gentle and mountains steep but not cliffs, at 10 m, 100 m and 1 km.
   - Mountain slopes change smoothly with scale.
 - **Orbit view.** Its basis stays orthonormal after mixed drags, zoom keeps the point under the camera, it can be placed on the pole, it tilts to nearly straight up, and heading 0 looks north.
+
+`cloud-check.ts` (run by `npm run check`):
+
+- Sea-relative shell intervals from ground, orbit and inside, including grazing rays, both sides of the shell, and clipping at scene depth.
+- Equal-area weather/volume coverage, atlas interpolation, longitude and periodic 3D noise continuity.
+- Bounded density, empty space above/below the layer, zero coverage, and monotonic coverage control.
+- Homogeneous volume integration against the analytic Beer–Lambert solution.

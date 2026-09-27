@@ -12,6 +12,8 @@ import { generateStars, DEFAULT_STARS, STAR_DISTANCE } from './src/Stars';
 import { OrbitView } from './src/OrbitView';
 import { DEFAULT_LAYERED, layeredTerrain, MAX_HEIGHT, noise, noiseWithGradient, SEA_LEVEL } from './src/LayeredTerrain';
 
+import { checkClouds } from './cloud-check';
+
 let failures = 0;
 function check(name: string, ok: boolean, detail: string): void {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}: ${detail}`);
@@ -241,6 +243,8 @@ console.log('Layered terrain');
   const ratio = quantile(slopes.mountains[10]!, 0.5) / quantile(slopes.mountains[1000]!, 0.5);
   check('mountain slopes vary smoothly with scale', ratio > 1 && ratio < 4, `median slope at 10 m is ${ratio.toFixed(2)}× that at 1 km`);
 }
+
+checkClouds(check);
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
 if (failures > 0) process.exit(1);

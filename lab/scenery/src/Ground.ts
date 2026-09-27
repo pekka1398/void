@@ -14,6 +14,8 @@ const MAX_LEVEL = HOLMAN_SPLIT_DISTANCE_RATIOS.length;
 export class Ground {
   readonly lod: PlanetLod;
   readonly tiles: TileRenderer;
+  /** Changes when a worker delivers data, waking a stationary view for progressive refinement. */
+  revision = 0;
   private readonly workers: TileWorkerPool<unknown>;
 
   constructor(terrain: SceneryTerrain, workerCount: number, onFatal: (error: Error) => void) {
@@ -34,7 +36,7 @@ export class Ground {
     this.workers = new TileWorkerPool(
       () => terrain.createWorker(),
       { radiusMeters: terrain.radiusMeters, resolution: RESOLUTION }, terrain.workerConfig,
-      (tile) => { this.lod.acceptTile(tile); this.lod.unpinBuild(tile.id); },
+      (tile) => { this.lod.acceptTile(tile); this.lod.unpinBuild(tile.id); this.revision++; },
       onFatal, workerCount, (id) => this.lod.pinBuild(id));
   }
 

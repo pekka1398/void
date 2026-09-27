@@ -7,7 +7,8 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "check": "tsx scenery-check.ts"
+    "check": "tsx scenery-check.ts",
+    "check:shader": "node cloud-shader-check.mjs"
   },
   "dependencies": {
     "three": "0.185.1"

@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import {
-  cross, dot, exp, float, Fn, If, length, Loop, max, min, mix, normalize, smoothstep, sqrt, texture, uniform, vec2, vec3, vec4,
+  Break, cross, dot, exp, float, Fn, If, int, length, max, min, mix, normalize, outputStruct, property, smoothstep, sqrt, texture, uniform, vec2, vec3, vec4,
   getViewPosition, logarithmicDepthToViewZ, screenUV,
 } from 'three/tsl';
 import {
@@ -9,6 +9,10 @@ import {
 import {
   buildIrradianceTable, buildMultipleScatteringTable, IRRADIANCE_HEIGHT, IRRADIANCE_WIDTH, MULTIPLE_SCATTERING_SIZE,
 } from './SkyTables';
+
+import { shaderLoop } from './ShaderLoop';
+import type { CloudShading } from './CloudNodes';
+import { CLOUD_BOTTOM, CLOUD_TOP, CLOUD_EXTINCTION } from './CloudField';
 
 type FloatNode = THREE.Node<'float'>;
 type Vec3Node = THREE.Node<'vec3'>;
@@ -23,7 +27,7 @@ const VIEW_STEPS = 32;
  *
  * - `sunTransmittance`, for the ground's shading: how much sunlight reaches a
  *   point through the air, from the transmittance table.
- * - `composite`, a full-screen pass over the rendered scene: every pixel's
+ * - `transport`, a reduced-resolution pass over the rendered scene: every pixel's
  *   colour is dimmed by the air between it and the camera, and the light the
  *   air scatters toward the camera on the way is added. Sky pixels (nothing
  *   drawn, or stars) run to the top of the air, or to the ground sphere; the
@@ -118,7 +122,8 @@ export class AtmosphereShading {
     );
     const horizonMu = sqrt(max(float(1).sub(this.bottom.mul(this.bottom).div(r2)), 0)).negate();
     const visible = smoothstep(horizonMu.sub(SUN_ANGULAR_RADIUS), horizonMu.add(SUN_ANGULAR_RADIUS), mu);
-    return texture(this.transmittanceTable, uv).rgb.mul(visible);
+    // Marching branches differ per pixel: implicit texture derivatives are undefined there.
+    return texture(this.transmittanceTable, uv).level(float(0)).rgb.mul(visible);
   }
 
   /** (height, sun zenith cosine) coordinates of the multiple-scattering and irradiance tables; see SkyTables.ts. */
@@ -131,19 +136,20 @@ export class AtmosphereShading {
 
   /** Light scattered twice or more, per unit scattering coefficient and sun illuminance. */
   multipleScattering(r: FloatNode, sunMu: FloatNode): Vec3Node {
-    return texture(this.multipleScatteringTable, this.skyTableUv(r, sunMu, MULTIPLE_SCATTERING_SIZE, MULTIPLE_SCATTERING_SIZE)).rgb;
+    return texture(this.multipleScatteringTable, this.skyTableUv(r, sunMu, MULTIPLE_SCATTERING_SIZE, MULTIPLE_SCATTERING_SIZE)).level(float(0)).rgb;
   }
 
   /** Sky irradiance (without the sun's beam) on level ground at radius r, per unit sun illuminance. */
   skyIrradiance(r: FloatNode, sunMu: FloatNode): Vec3Node {
-    return texture(this.irradianceTable, this.skyTableUv(r, sunMu, IRRADIANCE_WIDTH, IRRADIANCE_HEIGHT)).rgb;
+    return texture(this.irradianceTable, this.skyTableUv(r, sunMu, IRRADIANCE_WIDTH, IRRADIANCE_HEIGHT)).level(float(0)).rgb;
   }
 
-  /** The composite pass: `color` and `depth` are the scene pass's textures (logarithmic depth). */
-  composite(color: ReturnType<typeof texture>, depth: ReturnType<typeof texture>): ReturnType<typeof vec4> {
+  /** Joint air/cloud transport, written once into two low-resolution render attachments. */
+  transport(depth: ReturnType<typeof texture>, clouds: CloudShading) {
+    const lightOutput = property('vec4');
+    const transmissionOutput = property('vec4');
     const p = this.params;
     const pass = Fn(() => {
-      const scene = color.rgb;
       const viewZ = logarithmicDepthToViewZ(depth.x, this.cameraNear, this.cameraFar);
       const viewDirection = normalize(getViewPosition(screenUV, float(0.5), this.projectionInverse));
       // Distance along the ray to what was drawn; sky pixels read about the far plane.
@@ -153,18 +159,24 @@ export class AtmosphereShading {
 
       const r0 = this.bottom.add(this.cameraAltitude);
       const mu0 = dot(this.cameraUp, rd);
+      const orbital = this.cameraAltitude.greaterThan(50000);
+      const projection = orbital.select(dot(this.planetCenter.negate(), rd), r0.mul(mu0));
+      const closest = this.planetCenter.negate().sub(rd.mul(projection));
+      const closestSquared = dot(closest, closest);
       // r0² − R², kept exact near the ground: altitude (2R + altitude).
       const aboveGround = this.cameraAltitude.mul(this.bottom.mul(2).add(this.cameraAltitude));
-      const groundDiscriminant = r0.mul(r0).mul(mu0.mul(mu0)).sub(aboveGround);
+      const groundDiscriminant = orbital.select(this.bottom.mul(this.bottom).sub(closestSquared),
+        r0.mul(r0).mul(mu0.mul(mu0)).sub(aboveGround));
       const hitsGround = mu0.lessThan(0).and(groundDiscriminant.greaterThanEqual(0));
-      const groundDistance = r0.negate().mul(mu0).sub(sqrt(max(groundDiscriminant, 0)));
-      const topDiscriminant = r0.mul(r0).mul(mu0.mul(mu0).sub(1)).add(this.top.mul(this.top));
+      const groundDistance = projection.negate().sub(sqrt(max(groundDiscriminant, 0)));
+      const topDiscriminant = orbital.select(this.top.mul(this.top).sub(closestSquared),
+        r0.mul(r0).mul(mu0.mul(mu0).sub(1)).add(this.top.mul(this.top)));
 
       const transmittance = vec3(1, 1, 1).toVar();
       const inscatter = vec3(0, 0, 0).toVar();
-      If(this.enabled.greaterThan(0).and(topDiscriminant.greaterThan(0)), () => {
-        const topNear = r0.negate().mul(mu0).sub(sqrt(topDiscriminant));
-        const topFar = r0.negate().mul(mu0).add(sqrt(topDiscriminant));
+      If(this.enabled.greaterThan(0).or(clouds.enabled.greaterThan(0)).and(topDiscriminant.greaterThan(0)), () => {
+        const topNear = projection.negate().sub(sqrt(topDiscriminant));
+        const topFar = projection.negate().add(sqrt(topDiscriminant));
         const start = max(topNear, 0);
         const end = min(min(topFar, sceneDistance), mix(float(1e30), groundDistance, hitsGround.select(1, 0))).toVar();
         If(end.greaterThan(start), () => {
@@ -176,45 +188,110 @@ export class AtmosphereShading {
             .div(float(1 + g * g).sub(cosTheta.mul(2 * g)).pow(1.5));
           const sunMu0 = dot(this.cameraUp, sun).mul(r0);
           const rdSun = dot(rd, sun);
-          const span = end.sub(start);
-          Loop(VIEW_STEPS, ({ i }) => {
-            // Samples crowd toward the camera, where the air is densest along most rays.
-            const s0 = float(i).div(VIEW_STEPS);
-            const s1 = float(i).add(1).div(VIEW_STEPS);
-            const sm = float(i).add(0.5).div(VIEW_STEPS);
-            const t = start.add(span.mul(sm.mul(sm)));
-            const dt = span.mul(s1.mul(s1).sub(s0.mul(s0)));
-            const r = sqrt(r0.mul(r0).add(r0.mul(mu0).mul(t).mul(2)).add(t.mul(t)));
-            const height = max(r.sub(this.bottom), 0);
-            const rayleigh = exp(height.div(-p.rayleighScaleHeight));
-            const mie = exp(height.div(-p.mieScaleHeight));
-            const ozone = max(float(1).sub(height.sub(p.ozoneCenterHeight).abs().div(p.ozoneWidth / 2)), 0);
-            const rayleighScattering = vec3(...p.rayleighScattering).mul(rayleigh);
-            const extinction = rayleighScattering.add(mie.mul(p.mieExtinction)).add(vec3(...p.ozoneAbsorption).mul(ozone));
-            const scattering = rayleighScattering.mul(phaseR).add(mie.mul(p.mieScattering).mul(phaseM));
-            const sunMu = sunMu0.add(rdSun.mul(t)).div(r);
-            const allScattering = rayleighScattering.add(mie.mul(p.mieScattering));
-            const source = scattering.mul(this.sunTransmittance(r, sunMu))
-              .add(allScattering.mul(this.multipleScattering(r, sunMu).mul(this.multipleEnabled)))
-              .mul(this.sunIlluminance);
-            const step = exp(extinction.mul(dt).negate());
-            // Hillaire's energy-conserving integral of the source over the step.
-            inscatter.addAssign(transmittance.mul(source.sub(source.mul(step))).div(extinction));
-            transmittance.mulAssign(step);
+          // A ray can meet the shell twice (near and far sides), with clear air between.
+          // Split at all four shell crossings before integration, so orbit rays cannot skip a thin layer.
+          const shellRoots = (shellHeight: FloatNode) => {
+            const shellRadius = this.bottom.add(shellHeight);
+            const h = this.cameraAltitude.sub(shellHeight);
+            const discriminant = orbital.select(shellRadius.mul(shellRadius).sub(closestSquared),
+              r0.mul(r0).mul(mu0.mul(mu0)).sub(h.mul(shellRadius.mul(2).add(h))));
+            const root = sqrt(max(discriminant, 0));
+            return { near: projection.negate().sub(root).clamp(start, end),
+              far: projection.negate().add(root).clamp(start, end), discriminant };
+          };
+          const outer = shellRoots(clouds.seaLevel.add(CLOUD_TOP));
+          const inner = shellRoots(clouds.seaLevel.add(CLOUD_BOTTOM));
+          const cloudRay = clouds.enabled.greaterThan(0).and(clouds.coverage.greaterThan(0)).and(outer.discriminant.greaterThan(0));
+          const b1 = cloudRay.select(outer.near, end);
+          const b2 = cloudRay.select(inner.near, end);
+          const b3 = cloudRay.select(inner.far, end);
+          const b4 = cloudRay.select(outer.far, end);
+          shaderLoop('cloudSegment', 5, segment => {
+            const from = segment.equal(0).select(start, segment.equal(1).select(b1,
+              segment.equal(2).select(b2, segment.equal(3).select(b3, b4))));
+            const to = segment.equal(0).select(b1, segment.equal(1).select(b2,
+              segment.equal(2).select(b3, segment.equal(3).select(b4, end))));
+            If(to.greaterThan(from), () => {
+              const midpoint = rd.mul(from.add(to).mul(0.5));
+              const midHeight = clouds.height(midpoint).sub(clouds.seaLevel);
+              const inCloud = cloudRay.and(midHeight.greaterThan(CLOUD_BOTTOM)).and(midHeight.lessThan(CLOUD_TOP));
+              const steps = int(inCloud.select(this.cameraAltitude.lessThan(100000).select(48, 24), VIEW_STEPS));
+              const span = to.sub(from).toVar();
+              shaderLoop('viewStep', steps, i => {
+                If(transmittance.x.max(transmittance.y).max(transmittance.z).lessThan(0.003), () => { Break(); });
+                // Quadratic spacing retains short steps when the camera starts inside the cloud.
+                const s0 = float(i).div(float(steps));
+                const s1 = float(i).add(1).div(float(steps));
+                const sm = float(i).add(0.5).div(float(steps));
+                const t = from.add(span.mul(sm.mul(sm))).toVar();
+                const dt = span.mul(s1.mul(s1).sub(s0.mul(s0))).toVar();
+                const position = rd.mul(t).toVar();
+                const height = max(clouds.height(position), 0);
+                const r = this.bottom.add(height);
+                const rayleigh = exp(height.div(-p.rayleighScaleHeight));
+                const mie = exp(height.div(-p.mieScaleHeight));
+                const ozone = max(float(1).sub(height.sub(p.ozoneCenterHeight).abs().div(p.ozoneWidth / 2)), 0);
+                const rayleighScattering = vec3(...p.rayleighScattering).mul(rayleigh);
+                const extinction = rayleighScattering.add(mie.mul(p.mieExtinction)).add(vec3(...p.ozoneAbsorption).mul(ozone))
+                  .mul(this.enabled).toVar();
+                const scattering = rayleighScattering.mul(phaseR).add(mie.mul(p.mieScattering).mul(phaseM));
+                const sunMu = sunMu0.add(rdSun.mul(t)).div(r);
+                const allScattering = rayleighScattering.add(mie.mul(p.mieScattering));
+                const source = scattering.mul(this.sunTransmittance(r, sunMu))
+                  .add(allScattering.mul(this.multipleScattering(r, sunMu).mul(this.multipleEnabled)))
+                  .mul(this.sunIlluminance).mul(this.enabled).toVar();
+                If(inCloud, () => {
+                  const footprint = max(dt, t.div(clouds.focalPixels)).mul(2);
+                  const sigma = clouds.density(position, footprint).mul(CLOUD_EXTINCTION).toVar();
+                  If(sigma.greaterThan(0.000001), () => {
+                    extinction.addAssign(vec3(sigma));
+                    source.addAssign(clouds.source(position, rd, footprint).mul(sigma));
+                  });
+                });
+                const step = exp(extinction.mul(dt).negate());
+                // Joint air/cloud transport, in depth order. An air-only pass on top of clouds is insufficient.
+                const integral = vec3(
+                  extinction.x.greaterThan(1e-10).select(float(1).sub(step.x).div(max(extinction.x, 1e-10)), dt),
+                  extinction.y.greaterThan(1e-10).select(float(1).sub(step.y).div(max(extinction.y, 1e-10)), dt),
+                  extinction.z.greaterThan(1e-10).select(float(1).sub(step.z).div(max(extinction.z, 1e-10)), dt));
+                inscatter.addAssign(transmittance.mul(source).mul(integral));
+                transmittance.mulAssign(step);
+              });
+            });
           });
         });
       });
 
-      // The sun's disc on the sky, limb-darkened: angular distance from its centre, as a sine.
+      lightOutput.assign(vec4(inscatter, depth.x));
+      transmissionOutput.assign(vec4(transmittance, 1));
+      return vec3(0);
+    });
+    return { evaluate: pass(), output: outputStruct(lightOutput, transmissionOutput) };
+  }
+
+  /** Full-resolution solar disc; the low-resolution transport supplies its attenuation. */
+  sunDisc(depth: ReturnType<typeof texture>): Vec3Node {
+    return Fn(() => {
+      const viewZ = logarithmicDepthToViewZ(depth.x, this.cameraNear, this.cameraFar);
+      const viewDirection = normalize(getViewPosition(screenUV, float(0.5), this.projectionInverse));
+      const sceneDistance = viewZ.div(viewDirection.z);
+      const rd = normalize(this.cameraRotation.mul(vec4(viewDirection, 0)).xyz);
+      const sun = this.sunDirection;
+      const r0 = this.bottom.add(this.cameraAltitude);
+      const mu0 = dot(this.cameraUp, rd);
+      const closest = this.planetCenter.negate().sub(rd.mul(dot(this.planetCenter.negate(), rd)));
+      const aboveGround = this.cameraAltitude.mul(this.bottom.mul(2).add(this.cameraAltitude));
+      const groundDiscriminant = this.cameraAltitude.greaterThan(50000).select(
+        this.bottom.mul(this.bottom).sub(dot(closest, closest)), r0.mul(r0).mul(mu0.mul(mu0)).sub(aboveGround));
+      const hitsGround = mu0.lessThan(0).and(groundDiscriminant.greaterThanEqual(0));
       const offCentre = length(cross(rd, sun)).div(Math.sin(SUN_ANGULAR_RADIUS));
       const sky = sceneDistance.greaterThan(1e10).and(hitsGround.not()).and(dot(rd, sun).greaterThan(0));
       const limb = sqrt(max(float(1).sub(offCentre.mul(offCentre)), 0));
       const discRadiance = this.sunIlluminance.div(Math.PI * SUN_ANGULAR_RADIUS ** 2);
       const disc = sky.select(float(1), float(0)).mul(offCentre.lessThan(1).select(float(1), float(0)))
         .mul(float(0.4).add(limb.mul(0.6))).mul(discRadiance);
-      return vec4(scene.mul(transmittance).add(inscatter).add(transmittance.mul(disc)), 1);
-    });
-    return pass();
+      return vec3(disc);
+    })();
   }
 }
 

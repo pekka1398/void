@@ -2,6 +2,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
 #app canvas { display: block; }
 .panel {
   position: fixed; top: 10px; left: 10px; width: 300px; padding: 10px 12px;
+  max-height: calc(100vh - 42px); overflow-y: auto;
   background: rgba(8, 12, 20, 0.78); border: 1px solid rgba(140, 180, 220, 0.25); border-radius: 6px;
   color: #cfe3f5; font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; user-select: none;
 }

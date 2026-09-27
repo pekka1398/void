@@ -1,7 +1,8 @@
 import * as THREE from 'three/webgpu';
-import { pass } from 'three/tsl';
+import { SceneryPipeline } from './SceneryPipeline';
 import { earthLikeAtmosphere, type Vec3 } from './Atmosphere';
 import { AtmosphereShading } from './AtmosphereNodes';
+import { CloudShading } from './CloudNodes';
 import { Ground } from './Ground';
 import { GroundMaterial } from './GroundMaterial';
 import { StarField } from './Stars';
@@ -10,6 +11,10 @@ import { sceneryTerrain } from './Terrains';
 import './style.css';
 
 const DEG = Math.PI / 180;
+let frameDirty = true;
+let renderedGroundRevision = -1;
+let lastFrameHeight = Infinity;
+let renderedFrames = 0;
 
 function panic(error: unknown): never {
   const message = error instanceof Error ? `${error.message}\n\n${error.stack ?? ''}` : String(error);
@@ -29,6 +34,10 @@ function element<T extends HTMLElement>(selector: string): T {
 }
 
 const app = element<HTMLDivElement>('#app');
+app.addEventListener('input', () => { frameDirty = true; });
+app.addEventListener('click', (event) => {
+  if (event.target instanceof Element && event.target.closest('button')) frameDirty = true;
+});
 app.innerHTML = `
   <div class="panel">
     <div class="title">SCENERY LAB</div>
@@ -45,14 +54,17 @@ app.innerHTML = `
       <option value="aces">ACES filmic</option><option value="agx">AgX</option><option value="neutral">Neutral</option>
     </select></label>
     <div class="toggles">
+      <label><input id="clouds" type="checkbox" checked /> clouds</label>
+      <label><input id="weather-only" type="checkbox" /> weather only</label>
       <label><input id="air" type="checkbox" checked /> atmosphere</label>
       <label><input id="multiple" type="checkbox" checked /> multi-scatter</label>
       <label><input id="ocean" type="checkbox" checked /> ocean</label>
       <label><input id="stars" type="checkbox" checked /> stars</label>
     </div>
+    <label>cloud coverage <span id="coverage-value"></span><input id="coverage" type="range" min="0" max="1" step="0.01" value="0.62" /></label>
     <div class="presets">
       <span data-preset="ground">ground</span><span data-preset="sunset">sunset</span><span data-preset="night">night</span>
-      <span data-preset="plane">10 km</span><span data-preset="orbit">400 km</span><span data-preset="space">20,000 km</span>
+      <span data-preset="cloud">cloud layer</span><span data-preset="plane">10 km</span><span data-preset="orbit">400 km</span><span data-preset="space">20,000 km</span>
     </div>
     <div class="help">left drag: pan · right drag: orbit · Shift + left drag: turn · wheel: zoom</div>
   </div>`;
@@ -71,7 +83,7 @@ terrainInput.addEventListener('change', () => {
 
 const renderer = new THREE.WebGPURenderer({ antialias: false, forceWebGL: true, logarithmicDepthBuffer: true });
 if (!(window.devicePixelRatio > 0)) throw new Error(`invalid devicePixelRatio ${window.devicePixelRatio}`);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(1);
 renderer.setClearColor(0x000000);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 app.append(renderer.domElement);
@@ -81,7 +93,8 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1e14);
 
 const atmosphere = new AtmosphereShading(earthLikeAtmosphere(radius));
-const ground = new Ground(terrain, Math.max(1, navigator.hardwareConcurrency - 1), (e) => panic(e));
+const clouds = new CloudShading(atmosphere);
+const ground = new Ground(terrain, Math.min(2, navigator.hardwareConcurrency), (e) => panic(e));
 const groundMaterial = new GroundMaterial(atmosphere, terrain.rockHeight, terrain.snowHeight);
 ground.tiles.setMaterial(groundMaterial.material);
 scene.add(ground.tiles.group);
@@ -90,9 +103,7 @@ const sky = new THREE.Group();
 sky.add(stars.points);
 scene.add(sky);
 
-const scenePass = pass(scene, camera);
-const pipeline = new THREE.RenderPipeline(renderer);
-pipeline.outputNode = atmosphere.composite(scenePass.getTextureNode('output'), scenePass.getTextureNode('depth'));
+const pipeline = new SceneryPipeline(renderer, atmosphere, clouds);
 
 // ?at=latitude,longitude in degrees picks the spot the camera starts over.
 const at = new URLSearchParams(window.location.search).get('at');
@@ -131,6 +142,9 @@ seaInput.max = String(terrain.maxHeightMeters);
 seaInput.value = String(terrain.defaultSeaLevel);
 const exposureInput = element<HTMLInputElement>('#exposure');
 const toneInput = element<HTMLSelectElement>('#tone');
+const cloudsInput = element<HTMLInputElement>('#clouds');
+const weatherOnlyInput = element<HTMLInputElement>('#weather-only');
+const coverageInput = element<HTMLInputElement>('#coverage');
 const airInput = element<HTMLInputElement>('#air');
 const multipleInput = element<HTMLInputElement>('#multiple');
 const oceanInput = element<HTMLInputElement>('#ocean');
@@ -150,6 +164,11 @@ timeInput.addEventListener('input', () => setLocalTime(Number(timeInput.value)))
 function applySettings(): void {
   groundMaterial.seaLevel.value = Number(seaInput.value);
   groundMaterial.oceanEnabled.value = oceanInput.checked ? 1 : 0;
+  clouds.enabled.value = cloudsInput.checked ? 1 : 0;
+  clouds.weatherOnly.value = weatherOnlyInput.checked ? 1 : 0;
+  clouds.coverage.value = Number(coverageInput.value);
+  clouds.seaLevel.value = Number(seaInput.value);
+  element('#coverage-value').textContent = coverageInput.value;
   atmosphere.enabled.value = airInput.checked ? 1 : 0;
   atmosphere.multipleEnabled.value = multipleInput.checked ? 1 : 0;
   stars.points.visible = starsInput.checked;
@@ -162,7 +181,7 @@ function applySettings(): void {
   element('#sea-value').textContent = `${Number(seaInput.value).toFixed(0)} m`;
   element('#exposure-value').textContent = `×${renderer.toneMappingExposure.toFixed(2)}`;
 }
-for (const input of [declinationInput, seaInput, exposureInput, toneInput, airInput, multipleInput, oceanInput, starsInput]) {
+for (const input of [declinationInput, seaInput, exposureInput, toneInput, cloudsInput, weatherOnlyInput, coverageInput, airInput, multipleInput, oceanInput, starsInput]) {
   input.addEventListener('input', applySettings);
 }
 applySettings();
@@ -172,6 +191,7 @@ const PRESETS: Record<string, { height: number; pitch: number; hours: number; he
   ground: { height: 2, pitch: 0.05, hours: 10 },
   sunset: { height: 300, pitch: 0.03, hours: 18.1, heading: 270 * DEG },
   night: { height: 2, pitch: 0.4, hours: 23 },
+  cloud: { height: 0, pitch: 0, hours: 12 },
   plane: { height: 10e3, pitch: -0.08, hours: 15 },
   orbit: { height: 400e3, pitch: -0.3, hours: 9 },
   space: { height: 20e6, pitch: -Math.PI / 2, hours: 15 },
@@ -181,7 +201,10 @@ for (const button of document.querySelectorAll<HTMLElement>('[data-preset]')) {
     const preset = PRESETS[button.dataset.preset ?? ''];
     if (!preset) throw new Error(`unknown preset ${button.dataset.preset}`);
     const here = where();
-    view.place(here.up, radius + here.surface + preset.height, preset.heading ?? 0, Math.PI / 2 + preset.pitch);
+    const presetRadius = button.dataset.preset === 'cloud'
+      ? radius + Math.max(Number(seaInput.value) + 3000, here.surface + OrbitView.MIN_HEIGHT)
+      : radius + here.surface + preset.height;
+    view.place(here.up, presetRadius, preset.heading ?? 0, Math.PI / 2 + preset.pitch);
     setLocalTime(preset.hours);
   });
 }
@@ -211,6 +234,7 @@ canvas.addEventListener('pointermove', (event) => {
   if (!pointer || pointer.id !== event.pointerId) return;
   const dx = event.clientX - pointer.x;
   const dy = event.clientY - pointer.y;
+  if (dx === 0 && dy === 0) return;
   const height = where().height;
   // lab/lod's 0.005 rad per pixel, slowed near the ground so a pixel stays about a pixel of ground.
   const orbitRate = 0.005 * Math.min(1, height / radius);
@@ -218,11 +242,13 @@ canvas.addEventListener('pointermove', (event) => {
   else if (pointer.mode === 'look') view.turn(-dx * 0.005, dy * 0.005);
   else view.panScreen(dx, dy, camera.fov * DEG, canvas.clientHeight, height);
   keepAboveSurface();
+  frameDirty = true;
   pointer.x = event.clientX;
   pointer.y = event.clientY;
 });
 canvas.addEventListener('wheel', (event) => {
   event.preventDefault();
+  frameDirty = true;
   const deltaPixels = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * 16 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? event.deltaY * canvas.clientHeight : event.deltaY;
   // Scales the height above the surface: about ×1.2 per 100 px notch.
   const here = where();
@@ -231,8 +257,11 @@ canvas.addEventListener('wheel', (event) => {
 }, { passive: false });
 
 function resize(): void {
+  frameDirty = true;
   const width = window.innerWidth, height = window.innerHeight;
+  renderer.setPixelRatio(Math.min(1, 1920 / width, 1080 / height));
   renderer.setSize(width, height);
+  pipeline.resize(renderer.domElement.width, renderer.domElement.height);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
 }
@@ -246,15 +275,28 @@ function surfaceHeight(up: Vec3): number {
 }
 
 let last = performance.now();
-let fps = 60;
+let fps = 30;
+let lastFrameTime = last;
 const basisMatrix = new THREE.Matrix4();
+
+await renderer.init();
+const gl = (renderer.backend as unknown as { gl: WebGL2RenderingContext }).gl;
+const gpuInfo = gl.getExtension('WEBGL_debug_renderer_info');
+const gpuName: string = gl.getParameter(gpuInfo ? gpuInfo.UNMASKED_RENDERER_WEBGL : gl.RENDERER);
 
 renderer.setAnimationLoop(() => {
   const now = performance.now();
+  if (document.hidden || now - last < 1000 / 30) return;
+  const animated = Number(rateInput.value) !== 0 || (oceanInput.checked && lastFrameHeight < 20000);
+  const changed = frameDirty || renderedGroundRevision !== ground.revision;
+  if (!changed && !animated) return;
+  frameDirty = false;
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
-  fps += (1 / Math.max(dt, 1e-3) - fps) * 0.05;
-  seconds += dt;
+  fps += (1 / Math.max((now - lastFrameTime) / 1000, 1e-3) - fps) * 0.05;
+  lastFrameTime = now;
+  // High-orbit input redraws must not advance a paused ocean clock.
+  if (oceanInput.checked && lastFrameHeight < 20000) seconds += dt;
 
   // The sun moves west as the planet turns east.
   subSolarLongitude -= Number(rateInput.value) * 15 * DEG * dt;
@@ -282,6 +324,9 @@ renderer.setAnimationLoop(() => {
   const focalPixels = renderer.domElement.height / (2 * Math.tan((camera.fov * DEG) / 2));
   const selection = ground.update(position, focalPixels);
   atmosphere.update(position, sun, camera);
+  clouds.update(position, focalPixels);
+  lastFrameHeight = here.height;
+  renderedGroundRevision = ground.revision;
   groundMaterial.update(position, seconds);
 
   // The sky turns with the sun. Stars fade where the camera is in sunlit air.
@@ -291,13 +336,16 @@ renderer.setAnimationLoop(() => {
   const daylight = smoothstep(-0.18, 0.02, sunMu) * (1 - smoothstep(0, 60e3, altitude)) * atmosphere.enabled.value;
   stars.brightness.value = 0.08 * (1 - daylight);
 
-  pipeline.render();
+  pipeline.render(scene, camera);
+  renderedFrames++;
 
   readout.textContent = [
-    `height ${formatMeters(here.height)} AGL · ${formatMeters(altitude)} ASL`,
+    `height ${formatMeters(here.height)} AGL · ${formatMeters(altitude - Number(seaInput.value))} ASL`,
     `lat ${(here.latitude / DEG).toFixed(3)}° lon ${(here.longitude / DEG).toFixed(3)}° pitch ${((view.tiltRadians - Math.PI / 2) / DEG).toFixed(0)}°`,
     `sun ${(Math.asin(sunMu) / DEG).toFixed(1)}° above horizon`,
-    `sky tables built in ${atmosphere.buildMilliseconds.toFixed(0)} ms`,
+    `GPU ${gpuName}`,
+    `render ${renderer.domElement.width}×${renderer.domElement.height} · air/cloud full size · ≤30 fps · idle stops · frame ${renderedFrames}`,
+    `sky tables ${atmosphere.buildMilliseconds.toFixed(0)} ms · cloud noise ${clouds.buildMilliseconds.toFixed(0)} ms`,
     `tiles ${selection.render.length} drawn · ${ground.queuedBuilds} building · ${fps.toFixed(0)} fps`,
   ].join('\n');
 });
