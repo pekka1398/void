@@ -66,7 +66,7 @@ Weather and volume stages are implemented, with full-resolution transport; the f
 - **Composition.** Cloud extinction and scattering enter the same Beer–Lambert integral as the air. Scene depth clips the volume at terrain or other scene geometry, and the same accumulated transmission dims the sun and stars. Very opaque rays stop accumulating below transmission 0.003.
 - **Start-up.** Weather and noise take about 1.5 s on the tested browser, separately reported from sky-table building.
 - **Browser checks.** Tested in Edge scenery tabs at ground, 3 km inside the layer, 10 km, 400 km and 20,000 km, plus sunset and zero coverage. No captured console errors or warnings. Cloud tops and interiors are visible. Orbital cloud edges and unresolved shadow speckle were revised after visual review; domed tops and clear bank gaps were additionally checked at 10 km and inside the layer; the coverage-moment and diffuse-light approximations still need tuning, and the far view still lacks temporal detail reconstruction.
-- **Next stage.** GPU timing, temporal reprojection to recover cloud detail, and ground cloud shadows. Currently clouds are static, cast no shadows on terrain, and do not reduce the ground's sky irradiance. The atmosphere's multiple-scattering tables remain clear-sky tables. This has not been integrated into flight.
+- **Next stage.** GPU timing, temporal reprojection to recover cloud detail, and ground cloud shadows. Currently clouds are static, cast no shadows on terrain, and do not reduce the ground's sky irradiance. The atmosphere's multiple-scattering tables remain clear-sky tables. These visuals are now integrated into the main game (and its shared flight entry point); flight browser acceptance remains a separate step.
 
 `npm run check:shader` bundles Three's source modules with its GLSL builder, builds the actual transport and resolve node graphs, and writes vertex/fragment GLSL into a temporary directory. It checks node generation; it does not create a graphics context. The generated shaders were additionally compiled and linked in an OpenGL ES 3 context during development.
 
@@ -127,7 +127,7 @@ A 33×33 tile takes about 3 ms to build in Node.
   - `TileMeshData.heights`: the per-vertex height above the reference radius, stitched across LOD seams like the positions.
   - A `height` vertex attribute.
   - `TileRenderer.setMaterial`, so a caller can shade the tiles itself.
-- **Scope.** `AtmosphereShading` and `GroundMaterial` know nothing about the page and are what lab/flight would take over later.
+- **Scope.** The main game's `src/sceneryCore.ts` imports the shading, cloud, star and pipeline modules directly. `src/FlightScenery.ts` supplies body-fixed positions, the render-to-body rotation and the terrain's separate render origin. This lab keeps its camera-relative body-fixed setup, which uses the identity render rotation. Landing's `TerrainConfig` reconstructs the pure layered sampler for both collision tiles and the visual worker, including each tile's cell size.
 
 ## Checks
 

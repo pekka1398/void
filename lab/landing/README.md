@@ -28,6 +28,8 @@ npm run dev        # interactive page
 
 ## Shared with the main game and lab/flight
 
+`TerrainConfig` also accepts scenery's `layered` options. `terrainFromConfig` rebuilds the same pure scenery sampler on the main thread and in the tile worker. Optional `cellMeters` filters geometry detail consistently for rendered and collision tiles; point height queries use full detail. The landing lab's own planets retain their hills fixtures.
+
 The main game in the repository's root `src/` imports these instead of copying them. lab/flight runs the same game entry point:
 
 - `vessel/DemoRocket.ts`: the two-stage rocket's collider shapes, masses and contact options, sized to the planet.

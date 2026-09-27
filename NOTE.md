@@ -8,6 +8,8 @@
 - lab/flight 是整合驗證入口，直接使用根目錄 src/；不維護另一份主遊戲實作。
 - 功能仍在所屬 lab 開發與驗證，主遊戲直接引用；整合接線與遊戲流程在 src/ 修改。
 - 功能修改後檢查所屬 lab，以及受影響的整合場景。瀏覽器驗收仍由我操作。
+- scenery 已接進主遊戲：layered 地形、地表／海洋 shader、大氣、體積雲和星空。Aurelia / Terra 預設 layered，繪圖與碰撞共用地形設定，發射點在乾燥低地。
+- 大氣與海洋目前只影響畫面；空氣阻力、升力、熱與浮力仍待開發。shader 和 headless 檢查通過後，瀏覽器整合驗收仍由我操作。
 
 WebGPU / compute 待辦（尚未實作）
 
@@ -45,7 +47,7 @@ part assembly staging
 6. 存檔管理
 
 - Maneuver nodes: the orbit lab has the flight plan, but flight/view don't have it yet.
-- Atmosphere: scenery only draws it. It has no physical effect, and Aurelia in flight has no air.
+- Atmosphere: scenery's air and clouds are integrated into the main game, with no physical effect yet.
 - Attitude: the orbit lab turns the ship instantly. There's no rotational inertia and no reaction wheels (ModuleReactionWheel).
 - Multiple ships: landing's EncounterPhysicsGate only does the range and closest-approach prediction. There's no list of ships and no shared physics world for two ships.
 - Structure: the rocket is one rigid body with no joint flex, so it can't bend or break.

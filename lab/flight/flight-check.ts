@@ -1,10 +1,18 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { bodyOrientation, cross, DominanceTree, dot, length, normalize, spinAxis, sub, type Vec3 } from '../../src/orbitCore';
-import { demoRocket, planetById, planetEphemeris, predictCoast, PartJointRocket, type LanderControl } from '../../src/landingCore';
+import { demoRocket, planetEphemeris, predictCoast, PartJointRocket, type LanderControl } from '../../src/landingCore';
 import { OrbitCamera, viewState } from '../view/src/ViewCamera';
 import { bodyFixedToRender, quatMultiply, quatRotate, renderAxes, vesselAxes } from '../../src/FlightFrame';
 import { navballBasis, toBall } from '../../src/navballCore';
+import { gamePlanetById } from '../../src/GamePlanet';
+import { FlightScenery } from '../../src/FlightScenery';
+import * as GPU_THREE from 'three/webgpu';
+import { layeredTerrain } from '../scenery/src/LayeredTerrain';
+import { terrainFromConfig } from '../landing/src/terrain/TerrainConfig';
+import { buildTerrainTile } from '../landing/src/terrain/TerrainTiles';
+import { tileContaining } from '../lod/src/lod/TileSearch';
+import { checkTerrainContract } from '../landing/src/terrain/SurfaceContract';
 
 let failures = 0;
 const normalizeQuat = (q: { x: number; y: number; z: number; w: number }) => {
@@ -19,10 +27,12 @@ function check(label: string, ok: boolean, detail: string): void {
 const angle = (a: Vec3, b: Vec3) => Math.atan2(length(cross(a, b)), dot(a, b));
 
 await RAPIER.init();
-const planet = planetById('aurelia');
+const gamePlanet = gamePlanetById('aurelia');
+const planet = gamePlanet.planet;
 const { ephemeris, bodyIndex } = planetEphemeris(planet);
 const home = ephemeris.bodies[bodyIndex]!;
 const rocket = demoRocket(planet.terrain);
+if (gamePlanet.launchSite) rocket.launchSite = gamePlanet.launchSite;
 const launch = () => PartJointRocket.landed(RAPIER, ephemeris, bodyIndex, planet.terrain, rocket.full, rocket.upper, rocket.booster, rocket.options, rocket.launchSite);
 
 {
@@ -51,6 +61,10 @@ const launch = () => PartJointRocket.landed(RAPIER, ephemeris, bodyIndex, planet
   const vertical = () => renderAxes(sub(lander.frame.toInertial(lander.time, lander.partState('upper')).position, ephemeris.bodyPosition(bodyIndex, lander.time)));
   const atStart = angle(rendered(), vertical());
   lander.advance(30, idle);
+  check('layered launch stays on dry ground with both parts intact',
+    planet.terrain.sample(normalize(rocket.launchSite)).heightMeters > gamePlanet.seaLevel &&
+    lander.partMode('upper') !== 'destroyed' && lander.partMode('booster') !== 'destroyed',
+    `sea ${gamePlanet.seaLevel} m; upper ${lander.partMode('upper')}, booster ${lander.partMode('booster')}`);
   const axes = bodyOrientation(home, lander.time);
   const u = quatRotate(lander.partOrientation('upper'), { x: 0, y: 1, z: 0 });
   const expected = renderAxes({ x: u.x * axes.x.x + u.y * axes.y.x + u.z * axes.z.x, y: u.x * axes.x.y + u.y * axes.y.y + u.z * axes.z.y, z: u.x * axes.x.z + u.y * axes.y.z + u.z * axes.z.z });
@@ -118,6 +132,66 @@ const launch = () => PartJointRocket.landed(RAPIER, ephemeris, bodyIndex, planet
   const s = turned({ x: 1, y: 0, z: 0 }), d = turned({ x: 0, y: 0, z: 1 });
   check('navball follows the steering keys', s.y > 0.9 * a && Math.abs(s.x) < 1e-9 && d.x > 0.9 * a && Math.abs(d.y) < 1e-9,
     `a 0.01 rad turn: S moves the nose to ball (${s.x.toExponential(1)}, ${s.y.toExponential(2)}), D to (${d.x.toExponential(2)}, ${d.y.toExponential(1)})`);
+}
+
+{
+  const config = planet.terrainConfig;
+  if (config.kind !== 'layered') throw new Error('default game terrain must be layered');
+  const cloned = terrainFromConfig(structuredClone(config));
+  const original = layeredTerrain(config.options);
+  const contract = checkTerrainContract(cloned, 256);
+  check('scenery terrain satisfies the landing contract', contract.length === 0, JSON.stringify(contract));
+  let worst = 0;
+  for (const cell of [1, 10, 100, 1000]) {
+    for (const d of [normalize(rocket.launchSite), { x: 1, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }]) {
+      worst = Math.max(worst, Math.abs(cloned.sample(d, cell).heightMeters - original(d, cell).heightMeters));
+    }
+  }
+  const key = tileContaining(normalize(rocket.launchSite), rocket.options.contact.tileLevel);
+  const collision = buildTerrainTile(key, planet.terrain, rocket.options.contact.tileResolution);
+  const worker = buildTerrainTile(key, cloned, rocket.options.contact.tileResolution);
+  const same = (a: ArrayLike<number>, b: ArrayLike<number>) => a.length === b.length && Array.from(a).every((n, i) => n === b[i]);
+  check('worker and collision terrain share the band-limited scenery sampler', worst === 0 &&
+    same(collision.positions, worker.positions) && same(collision.heights, worker.heights),
+    `sample difference ${worst} m; ${collision.heights.length} matching tile heights`);
+  check('airless lab planets remain airless', !gamePlanetById('luna').atmosphere && gamePlanetById('luna').terrainId === 'hills', 'Luna uses hills with no air or ocean');
+}
+
+{
+  // No graphics context is needed to verify the frame uniforms consumed by the shared shaders.
+  const renderer = new GPU_THREE.WebGPURenderer({ forceWebGL: true,
+    canvas: { width: 16, height: 16, style: {}, addEventListener() {} } as unknown as HTMLCanvasElement });
+  const scenery = new FlightScenery(renderer, new GPU_THREE.Scene(), gamePlanet);
+  const camera = new GPU_THREE.PerspectiveCamera(58, 1, 0.1, 1e14);
+  let worst = 0;
+  for (const time of [0, 20_000, 86_164]) {
+    const axes = bodyOrientation(home, time);
+    const q = bodyFixedToRender(axes);
+    const rotation = new GPU_THREE.Quaternion(q.x, q.y, q.z, q.w);
+    const renderToBody = new GPU_THREE.Matrix4().makeRotationFromQuaternion(rotation.clone().invert());
+    const origin = new GPU_THREE.Vector3(4e6, 3e6, 4e6);
+    for (const offset of [new GPU_THREE.Vector3(20, -10, 35), new GPU_THREE.Vector3(0, 0, 800e3)]) {
+      const bodyCamera = origin.clone().add(offset);
+      camera.position.copy(offset).applyQuaternion(rotation);
+      camera.lookAt(0, 0, 0);
+      camera.updateProjectionMatrix();
+      camera.updateMatrixWorld();
+      const sun = new GPU_THREE.Vector3(1, 0.2, -0.1).normalize();
+      scenery.update({ cameraBodyFixed: bodyCamera, renderOriginBodyFixed: origin, sunBodyFixed: sun,
+        renderToBody, camera, focalPixels: 1000, time });
+      const sample = new GPU_THREE.Vector3(30, 12, -5);
+      const renderSample = sample.clone().applyQuaternion(rotation);
+      const shaderRelative = renderSample.sub(scenery.ground.renderCameraPosition.value).applyMatrix4(scenery.ground.renderToBody.value);
+      const shaderBody = shaderRelative.sub(scenery.atmosphere.planetCenter.value);
+      worst = Math.max(worst, shaderBody.distanceTo(origin.clone().add(sample)));
+      const ray = new GPU_THREE.Vector3(0.2, -0.3, -1).normalize();
+      const actualRay = ray.clone().transformDirection(scenery.atmosphere.cameraRotation.value);
+      const expectedRay = ray.clone().transformDirection(camera.matrixWorld).applyQuaternion(rotation.clone().invert());
+      worst = Math.max(worst, actualRay.distanceTo(expectedRay), scenery.ground.localOrigin.value.distanceTo(origin));
+    }
+  }
+  check('scenery rays and terrain stay body-fixed across focus offsets and planet rotation', worst < 1e-7,
+    `largest frame difference ${worst.toExponential(1)}; independent near-ground and orbital camera offsets`);
 }
 
 if (failures > 0) {

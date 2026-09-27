@@ -21,13 +21,14 @@ type Vec3Node = THREE.Node<'vec3'>;
 export const SUN_ANGULAR_RADIUS = 0.004654;
 /** Samples along each view ray through the air. */
 const VIEW_STEPS = 32;
+const BODY_FIXED_RENDER = new THREE.Matrix4();
 
 /**
  * The atmosphere on the GPU. Two users:
  *
  * - `sunTransmittance`, for the ground's shading: how much sunlight reaches a
  *   point through the air, from the transmittance table.
- * - `transport`, a reduced-resolution pass over the rendered scene: every pixel's
+ * - `transport`, a full-resolution pass over the rendered scene: every pixel's
  *   colour is dimmed by the air between it and the camera, and the light the
  *   air scatters toward the camera on the way is added. Sky pixels (nothing
  *   drawn, or stars) run to the top of the air, or to the ground sphere; the
@@ -59,6 +60,8 @@ export class AtmosphereShading {
   readonly enabled = uniform(1);
   /** 0 leaves out multiple scattering, for comparison. */
   readonly multipleEnabled = uniform(1);
+  /** A caller with its own correctly positioned Sun mesh can disable the sky disc. */
+  readonly sunDiscEnabled = uniform(1);
   /** Camera matrices for the composite pass, whose own camera is the full-screen quad's. */
   readonly projectionInverse = uniform(new THREE.Matrix4());
   readonly cameraRotation = uniform(new THREE.Matrix4());
@@ -86,7 +89,7 @@ export class AtmosphereShading {
   /**
    * Per frame. `cameraBodyFixed` is the camera's body-fixed position (planet centre at the origin), metres.
    */
-  update(cameraBodyFixed: Vec3, sun: Vec3, camera: THREE.PerspectiveCamera): void {
+  update(cameraBodyFixed: Vec3, sun: Vec3, camera: THREE.PerspectiveCamera, renderToBody = BODY_FIXED_RENDER): void {
     const r = Math.hypot(cameraBodyFixed.x, cameraBodyFixed.y, cameraBodyFixed.z);
     if (!(r > 0)) throw new RangeError(`AtmosphereShading.update: camera at the planet centre`);
     const sunLength = Math.hypot(sun.x, sun.y, sun.z);
@@ -96,7 +99,8 @@ export class AtmosphereShading {
     this.cameraAltitude.value = r - this.params.bottomRadius;
     this.sunDirection.value.set(sun.x, sun.y, sun.z);
     this.projectionInverse.value.copy(camera.projectionMatrixInverse);
-    this.cameraRotation.value.copy(camera.matrixWorld);
+    // The transport ray must share the body-fixed axes of the atmosphere and cloud noise.
+    this.cameraRotation.value.multiplyMatrices(renderToBody, camera.matrixWorld);
     this.cameraNear.value = camera.near;
     this.cameraFar.value = camera.far;
   }
@@ -144,7 +148,7 @@ export class AtmosphereShading {
     return texture(this.irradianceTable, this.skyTableUv(r, sunMu, IRRADIANCE_WIDTH, IRRADIANCE_HEIGHT)).level(float(0)).rgb;
   }
 
-  /** Joint air/cloud transport, written once into two low-resolution render attachments. */
+  /** Joint air/cloud transport, written once into two full-resolution render attachments. */
   transport(depth: ReturnType<typeof texture>, clouds: CloudShading) {
     const lightOutput = property('vec4');
     const transmissionOutput = property('vec4');
@@ -290,7 +294,7 @@ export class AtmosphereShading {
       const discRadiance = this.sunIlluminance.div(Math.PI * SUN_ANGULAR_RADIUS ** 2);
       const disc = sky.select(float(1), float(0)).mul(offCentre.lessThan(1).select(float(1), float(0)))
         .mul(float(0.4).add(limb.mul(0.6))).mul(discRadiance);
-      return vec3(disc);
+      return vec3(disc.mul(this.sunDiscEnabled));
     })();
   }
 }

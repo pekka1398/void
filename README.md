@@ -10,7 +10,7 @@ npm run typecheck
 npm run build
 ```
 
-目前主遊戲仍使用 Three.js 的 WebGL2 後端、Rapier 接觸物理與 orbit lab 的軌道計算。WebGPU / compute 的實驗與整合列在 `NOTE.md`，尚未切換。
+目前主遊戲使用 Three.js 的 WebGL2 後端、Rapier 接觸物理、orbit lab 的軌道計算，以及 scenery lab 的地形、大氣、體積雲、海洋材質與星空。WebGPU / compute 的實驗與整合列在 `NOTE.md`，尚未切換。
 
 ## 開發分工
 
@@ -25,6 +25,12 @@ Git 維持單一分支存檔。一次完整的介面修改與呼叫更新一起�
 ## 整合場景
 
 主遊戲沿用 flight 的操作、行星參數與除錯工具，詳見 [Flight Lab](lab/flight/README.md)。`?planet=aurelia` 是預設場景。開發模式的日誌仍寫入 `lab/flight/lab-log/`，正式建置不啟用這個日誌服務。
+
+Aurelia、Aurelia-fast 和 Terra 預設使用 scenery 的 layered 地形，繪圖 worker 和 Rapier 碰撞共用同一份地形設定；發射點是海平面以上的低地。`?planet=aurelia&terrain=hills` 可以比較舊地形，該模式預設關閉海洋以保留原本發射點。Luna 與 Pebble 保留原地形並且沒有大氣與海洋。
+
+按反引號打開 DEV 面板，可切換大氣、雲、海洋與星空，並調整曝光。大氣和海洋目前是視覺效果，尚未加入空氣阻力、升力、再入熱或浮力。海洋顯示在海平面，固體碰撞仍在實際海床；不要把海面當成可降落的固體表面。
+
+瀏覽器驗收可依序查看發射點地面、上升穿雲、縮放到軌道與切換天體焦點，再查看自轉後的日夜光照、暫停／重置和 DEV 各個開關。程式檢查與 shader 生成不代表這些畫面已由使用者驗收。
 
 ## 舊參考遊戲
 

@@ -8,6 +8,7 @@ import { AtmosphereShading } from './src/AtmosphereNodes';
 import { SceneryPipeline } from './src/SceneryPipeline';
 import { CloudShading } from './src/CloudNodes';
 import { earthLikeAtmosphere } from './src/Atmosphere';
+import { GroundMaterial } from './src/GroundMaterial';
 const renderer = new THREE.WebGPURenderer({ forceWebGL: true,
   canvas: { width: 16, height: 16, style: {}, addEventListener() {} } as unknown as HTMLCanvasElement });
 const backend = renderer.backend as unknown as { extensions: unknown; capabilities: unknown };
@@ -47,3 +48,18 @@ resolveBuilder.build();
 writeFileSync(join(process.argv[2]!, 'scenery-resolve.vert'), resolveBuilder.vertexShader);
 writeFileSync(join(process.argv[2]!, 'scenery-resolve.frag'), resolveBuilder.fragmentShader);
 console.log(`Full-resolution resolve GLSL generated: ${resolveBuilder.fragmentShader.length} bytes`);
+
+// Build the actual batched terrain material as well, including the inertial-scene frame adapter.
+const ground = new GroundMaterial(atmosphere, 7600, 9800);
+const geometry = new THREE.PlaneGeometry(2, 2);
+const vertices = geometry.getAttribute('position').count;
+geometry.setAttribute('height', new THREE.BufferAttribute(new Float32Array(vertices).fill(5100), 1));
+geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(vertices * 3).fill(0.2), 3));
+const batch = new THREE.BatchedMesh(1, vertices, geometry.index!.count, ground.material);
+batch.addInstance(batch.addGeometry(geometry));
+const groundBuilder = new GLSLNodeBuilder(batch, renderer);
+groundBuilder.camera = new THREE.PerspectiveCamera();
+groundBuilder.build();
+writeFileSync(join(process.argv[2]!, 'scenery-ground.vert'), groundBuilder.vertexShader);
+writeFileSync(join(process.argv[2]!, 'scenery-ground.frag'), groundBuilder.fragmentShader);
+console.log(`Batched ground GLSL generated: ${groundBuilder.fragmentShader.length} bytes`);

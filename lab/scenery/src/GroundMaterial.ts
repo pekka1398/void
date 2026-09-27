@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import {
   attribute, clamp, vertexColor, cos, dot, float, floor, Fn, fract, fwidth, max, mix, mod, normalize, normalWorld, positionLocal, positionWorld, pow,
-  sin, smoothstep, uniform, vec3,
+  sin, smoothstep, uniform, vec3, vec4,
 } from 'three/tsl';
 import type { AtmosphereShading } from './AtmosphereNodes';
 
@@ -47,9 +47,9 @@ function periodicValueNoise(p: Vec3Node, period: number): FloatNode {
  * reddens at sunset and goes dark past the terminator; the composite pass then
  * adds the air between the ground and the camera.
  *
- * Land colour comes from height and slope (sand by the water, grass, rock on
- * steep ground and above the terrain's rock height, snow on flat ground above its snow height). The tile vertex colour
- * is not used. Vertices below sea level are raised onto the sea surface; the
+ * Land colour comes from the tile's ground-cover colour, height and slope (sand by the water,
+ * rock on steep ground and above the terrain's rock height, snow on flat ground above its snow height).
+ * Vertices below sea level are raised onto the sea surface; the
  * sea is coloured by its depth, reflects a flat sky colour, and carries a sun
  * glint shaped by the waves.
  */
@@ -61,6 +61,12 @@ export class GroundMaterial {
   /** Camera body-fixed position modulo WAVE_PERIOD on each axis, metres. */
   readonly waveOrigin = uniform(new THREE.Vector3());
   readonly time = uniform(0);
+  /** Rotation from the caller's render axes into native body-fixed axes. */
+  readonly renderToBody = uniform(new THREE.Matrix4());
+  /** Camera position in the caller's render scene. */
+  readonly renderCameraPosition = uniform(new THREE.Vector3());
+  /** Body-fixed origin subtracted from the batched terrain vertices, metres. */
+  readonly localOrigin = uniform(new THREE.Vector3());
 
   /** Heights where rock and snow begin, metres. */
   constructor(atmosphere: AtmosphereShading, rockHeight: number, snowHeight: number) {
@@ -69,25 +75,26 @@ export class GroundMaterial {
     const sea = this.seaLevel;
     const ocean = this.oceanEnabled;
 
-    // lab/lod's batch has already placed the vertex camera-relative, so it is in render space here.
+    // Batched vertices are body-fixed relative to the caller's terrain origin.
     this.material.positionNode = Fn(() => {
-      const up = normalize(positionLocal.sub(center));
+      const up = normalize(positionLocal.add(this.localOrigin));
       return positionLocal.add(up.mul(max(sea.sub(height), 0).mul(ocean)));
     })();
 
     this.material.colorNode = Fn(() => {
-      const fromCenter = positionWorld.sub(center);
+      const bodyPosition = this.renderToBody.mul(vec4(positionWorld.sub(this.renderCameraPosition), 0)).xyz;
+      const fromCenter = bodyPosition.sub(center);
       const up = normalize(fromCenter);
       const r = fromCenter.length();
       const sun = atmosphere.sunDirection;
       const sunMu = dot(up, sun);
-      const sunlight = atmosphere.sunTransmittance(r, sunMu).mul(atmosphere.sunIlluminance);
+      const sunlight = mix(vec3(1), atmosphere.sunTransmittance(r, sunMu), atmosphere.enabled).mul(atmosphere.sunIlluminance);
       // Sky irradiance on level ground from the table (multiple scattering included), plus a night floor for
       // starlight and airglow, exaggerated about a hundredfold so the night side is dim rather than black.
-      const skyLight = atmosphere.skyIrradiance(r, sunMu).mul(atmosphere.sunIlluminance).add(NIGHT_LIGHT);
+      const skyLight = atmosphere.skyIrradiance(r, sunMu).mul(atmosphere.enabled).mul(atmosphere.sunIlluminance).add(NIGHT_LIGHT);
 
       // Land.
-      const normal = normalize(normalWorld);
+      const normal = normalize(this.renderToBody.mul(vec4(normalWorld, 0)).xyz);
       const flat = dot(normal, up);
       const aboveSea = height.sub(sea.mul(ocean));
       const sand = vec3(0.42, 0.37, 0.26);
@@ -104,7 +111,7 @@ export class GroundMaterial {
       const snowLine = float(snowHeight).sub(float(snowHeight).sub(sea).mul(0.7).mul(up.z.mul(up.z)));
       const albedo = mix(rocky, snow, smoothstep(snowLine, snowLine.add(300), height).mul(smoothstep(0.8, 0.9, flat)));
       // Detail finer than the mesh: mottling from 256 m down to 1 m, each octave faded out where it is under a pixel.
-      const detailPosition = positionWorld.add(this.waveOrigin);
+      const detailPosition = bodyPosition.add(this.waveOrigin);
       const detail = float(0).toVar();
       for (const [index, wavelength] of DETAIL_WAVELENGTHS.entries()) {
         const q = detailPosition.div(wavelength).add(index * 17.31);
@@ -117,7 +124,7 @@ export class GroundMaterial {
       const land = mottled.mul(sunlight.mul(max(dot(normal, sun), 0)).add(skyLight.mul(dot(normal, up).mul(0.5).add(0.5)))).div(Math.PI);
 
       // Sea: wave normals from the waves' slopes, faded out where a wave is under a pixel wide.
-      const wavePosition = positionWorld.add(this.waveOrigin);
+      const wavePosition = bodyPosition.add(this.waveOrigin);
       const slope = vec3(0, 0, 0).toVar();
       const drawn = float(0).toVar();
       for (const [nx, ny, nz, steepness] of WAVES) {
@@ -130,7 +137,7 @@ export class GroundMaterial {
         drawn.addAssign(resolved.div(WAVES.length));
       }
       const waterNormal = normalize(up.sub(slope));
-      const toCamera = normalize(positionWorld.negate());
+      const toCamera = normalize(bodyPosition.negate());
       const facing = clamp(dot(waterNormal, toCamera), 0, 1);
       const fresnel = float(0.02).add(pow(float(1).sub(facing), 5).mul(0.98));
       const depth = max(sea.sub(height), 0);
@@ -153,7 +160,8 @@ export class GroundMaterial {
     })();
   }
 
-  update(cameraBodyFixed: { x: number; y: number; z: number }, seconds: number): void {
+  update(cameraBodyFixed: { x: number; y: number; z: number }, seconds: number, renderOriginBodyFixed = cameraBodyFixed): void {
+    this.localOrigin.value.set(renderOriginBodyFixed.x, renderOriginBodyFixed.y, renderOriginBodyFixed.z);
     const wrap = (v: number) => v - Math.floor(v / WAVE_PERIOD) * WAVE_PERIOD;
     this.waveOrigin.value.set(wrap(cameraBodyFixed.x), wrap(cameraBodyFixed.y), wrap(cameraBodyFixed.z));
     // Every wave's period divides no common time; keep the clock small for float32 by wrapping at a day.

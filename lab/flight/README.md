@@ -6,8 +6,9 @@ This is the first integration lab. It connects features that were each built and
 - **lab/orbit**: the N-body ephemeris of the whole solar system, reference frames and apsides.
 - **lab/navball**: the attitude ball.
 - **lab/view**: the single view. Zooming out from the rocket turns into the map, and the camera turns from the local vertical to the planet's north (see lab/view's decision).
+- **lab/scenery**: layered terrain shared by visual and collision tiles, ground/ocean shading, atmosphere and volumetric clouds, star field and full-resolution transport pipeline.
 
-The integration code was promoted to the repository's root `src/` on 2026-09-27 and is now the main game. This lab's `src/main.ts` imports that same entry point; there is no second implementation. The root `src/orbitCore.ts`, `src/landingCore.ts`, `src/navballCore.ts` and `src/viewCore.ts` import the feature labs directly. A change a feature needs is made in its own lab, and that lab's checks must keep passing. Integration wiring and game flow are changed in the root `src/`. `flight-check.ts` checks that root implementation, and the game and this lab share the root Vite configuration.
+The integration code was promoted to the repository's root `src/` on 2026-09-27 and is now the main game. This lab's `src/main.ts` imports that same entry point; there is no second implementation. The root `src/orbitCore.ts`, `src/landingCore.ts`, `src/navballCore.ts`, `src/viewCore.ts` and `src/sceneryCore.ts` import the feature labs directly. A change a feature needs is made in its own lab, and that lab's checks must keep passing. Integration wiring and game flow are changed in the root `src/`. `flight-check.ts` checks that root implementation, and the game and this lab share the root Vite configuration.
 
 ```sh
 cd lab/flight
@@ -19,10 +20,12 @@ npm run typecheck
 
 ## The page
 
-- **Planet.** The default is Aurelia inside the full sol system: the Sun, the planets and Selene, with a 23.4° axial tilt, all integrated as one N-body ephemeris. Its terrain is terra's placeholder hills, streamed as lab/lod tiles. `?planet=` also accepts the landing lab's lone planets (pebble, luna, terra), and `aurelia-fast`, which is Aurelia with a 2.4 h day for seeing the rotation in flight.
+- **Planet.** The default is Aurelia inside the full sol system: the Sun, the planets and Selene, with a 23.4° axial tilt, all integrated as one N-body ephemeris. Aurelia, Terra and Aurelia-fast use scenery's layered terrain, streamed as lab/lod tiles through landing's worker. Sea level is 5 km above the reference sphere (the terrain's ocean-floor datum), and the rocket starts on dry lowland at 0.3 rad latitude and 0.5 rad longitude. `?terrain=hills` preserves the old ground and launch point, with the ocean off by default. `?planet=` also accepts the landing lab's lone planets (pebble, luna, terra), and `aurelia-fast`, which is Aurelia with a 2.4 h day for seeing the rotation in flight. Pebble and Luna stay airless.
 - **Rendering.** Everything is in the inertial ecliptic frame, relative to the upper stage, with float64 subtraction on the CPU and a logarithmic depth buffer.
   - Tiles and rocket attitudes are body-fixed. They are turned into the scene by the planet's current orientation (`FlightFrame.bodyFixedToRender`).
   - The Sun lights the scene from its real direction, and a little ambient light keeps the night side flyable.
+  - Scenery's shaders receive body-fixed camera and Sun vectors plus the inverse render rotation. Terrain shading transforms positions and normals into those same axes, while ocean displacement uses the terrain batch's own origin. Stars remain inertial as the planet spins. The solar-system Sun is the map's actual positioned mesh; lone-body lab fixtures use a fixed inertial light and scenery's sky disc.
+  - The scene, joint air/cloud transport and resolve use matching full-resolution targets. ACES tone mapping and exposure match scenery's initial settings. Drawing resolution is capped at 1920×1080 and DPR at 1; LOD uses that actual pixel height. Simulation and drawing retain flight's animation loop, and hidden tabs skip updates/rendering.
 - **Terrain observers.** lab/lod's observers are every live part, plus the camera (lab/lod's `LodCamera`). The camera splits tiles with the same table, stopping one level above the collision level, and is the only horizon for culling, so from far out the planet's face toward the camera is drawn. The rocket's own detail stops where its cells would be under 2 px on screen (lab/lod's pixel limit): with the camera near the rocket, drawn terrain equals collision terrain, and zoomed out the drawn ground coarsens while collision terrain, built separately, does not.
 - **Camera.** This is lab/view's `OrbitCamera` and `viewState`, in single mode:
   - On the pad, the camera turns with the ground. In flight above about 25–76 km on Aurelia (0.004–0.012 R) it is inertial.
@@ -30,7 +33,7 @@ npm run typecheck
   - Then, from 400 km to 4,000 km, up turns from the local vertical to north, and the camera stops turning with the ground.
   - `Tab` or clicking a label focuses a body.
 - **Map path.** It is the landing lab's coast forecast (`predictCoast`), recomputed every 2 s of simulated time. It is drawn from its inertial trajectory relative to the dominant body, and ends at the terrain.
-- **Rocket.** It is sized KSP-style to reach low orbit on Aurelia, which has no atmosphere: 8.6 km/s of Δv in all.
+- **Rocket.** It is sized KSP-style to reach low orbit on Aurelia without atmospheric forces (the new air is visual only): 8.6 km/s of Δv in all.
   - Booster: 120 kN, Isp 310 s, liftoff thrust-to-weight about 2, 3.4 km/s, 101 s burn.
   - Upper stage: 20 kN, Isp 340 s, thrust-to-weight about 1.5, 5.1 km/s, 183 s burn.
   - It takes a gravity turn: climb, then pitch toward the east, which is where the ground's 450 m/s helps.
@@ -42,7 +45,7 @@ npm run typecheck
     - Click the speed's label to switch SURFACE (over the home planet's ground) and ORBIT (about the dominant body).
   - Beside the speed: lab/navball's ball, with the heading and pitch of the nose. It is drawn in the ecliptic frame, around the dominant body's local vertical and north, with grid north along its prime meridian exactly at a pole. Its prograde and retrograde markers follow the SURFACE/ORBIT switch.
   - Right: Ap, Pe and the impact, fading in with the map.
-  - Top right: the dev panel (`` ` ``), collapsed at first: planet, debug overlays, focus, camera and tiles.
+  - Top right: the dev panel (`` ` ``), collapsed at first: planet and terrain, visual atmosphere/cloud/ocean/star toggles, exposure, debug overlays, focus, camera and tiles.
   - Bottom right: the keys (`F1`).
 - **Controls** are the landing lab's:
   - `Space` stages, `Shift`/`Ctrl` throttle, `X` cuts.
@@ -53,7 +56,7 @@ npm run typecheck
 
 The **Draw terrain (profiling)** checkbox in the dev panel hides terrain draws while leaving LOD selection, tile workers, and tile object synchronization running. At a fixed camera and vessel position, wait until `queued` is zero, then compare several `flight-sample` records with the checkbox on and off. The `terrain-visibility` events mark each change.
 
-`perf` separates LOD selection (`selectMs`, with `traverseMs`, `balanceMs`, and `evictMs`), worker queue maintenance (`queueMs`), tile geometry synchronization (`syncMs`), and collider-line synchronization (`colliderMs`). `tileStats` records cache and renderer copy bytes, tile object creation/disposal over the sample interval, and the whole scene's draw calls and triangles. `drawMs` times the CPU call to `renderer.render` for the whole scene; it is **not** a GPU timer. The selected `tiles` count includes tiles outside the camera frustum, so it is not the number of terrain draw calls.
+`perf` separates LOD selection (`selectMs`, with `traverseMs`, `balanceMs`, and `evictMs`), worker queue maintenance (`queueMs`), tile geometry synchronization (`syncMs`), and collider-line synchronization (`colliderMs`). `tileStats` records cache and renderer copy bytes, tile object creation/disposal over the sample interval, and the scene pass's draw calls and triangles, captured before the transport/resolve passes reset renderer statistics. `drawMs` times the CPU call to the complete scenery pipeline; it is **not** a GPU timer. Samples include the scenery switches and drawing resolution. The selected `tiles` count includes tiles outside the camera frustum, so it is not the number of terrain draw calls.
 
 ## Checks
 
@@ -63,6 +66,9 @@ The **Draw terrain (profiling)** checkbox in the dev panel hides terrain draws w
 - The rocket's drawn attitude is its attitude in space: exactly upright at the pad, and still correct after settling tilted on a slope (to float32, Rapier's precision).
 - Co-rotating the camera about the spin axis keeps it fixed to the tilted planet's ground (6 hours, drift 4e-15).
 - The map path's inertial trajectory is the same coast as the landing lab's body-fixed forecast (to 5e-10 m) and ends at the impact.
+- The default layered launch remains dry and both rocket parts survive settling.
+- Scenery terrain satisfies landing's surface contract; cloned worker settings produce matching collision tile positions/heights and preserve geometry's cell-size filtering.
+- The scenery ray and terrain uniforms agree across planet rotation and near-ground/orbital camera offsets.
 
 ## Time warp
 
@@ -81,4 +87,4 @@ One row of rates, after KSP's two warps but without showing two modes: 1×, 2×,
 ## Not here yet
 
 - **Map interaction:** manoeuvre nodes and the flight plan (lab/orbit has them).
-- Atmosphere, terrain on other bodies, docking.
+- Atmospheric forces, sea buoyancy, terrain on other bodies, docking. Clouds remain static and do not cast ground shadows. Sea rendering raises submerged vertices to sea level; collision terrain remains the solid seabed.

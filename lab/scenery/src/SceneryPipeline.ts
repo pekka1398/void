@@ -16,6 +16,8 @@ export class SceneryPipeline {
   private readonly mediumQuad = new THREE.QuadMesh(this.mediumMaterial);
   private readonly display: THREE.RenderPipeline;
   readonly outputNode: THREE.Node<'vec4'>;
+  /** Scene counts before the transport and resolve passes reset renderer.info. */
+  readonly sceneStats = { drawCalls: 0, triangles: 0 };
 
   constructor(private readonly renderer: THREE.WebGPURenderer, atmosphere: AtmosphereShading, clouds: CloudShading) {
     const depth = texture(this.sceneTarget.depthTexture!);
@@ -44,6 +46,8 @@ export class SceneryPipeline {
     const renderer = this.renderer;
     renderer.setRenderTarget(this.sceneTarget);
     renderer.render(scene, camera);
+    this.sceneStats.drawCalls = renderer.info.render.drawCalls;
+    this.sceneStats.triangles = renderer.info.render.triangles;
     renderer.setRenderTarget(this.mediumTarget);
     this.mediumQuad.render(renderer);
     renderer.setRenderTarget(null);

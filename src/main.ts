@@ -2,12 +2,14 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three/webgpu';
 import { bodyOrientation, DominanceTree, normalize, osculatingOrbit, spinAxis, sub, type CelestialBody, type Vec3 } from './orbitCore';
 import {
-  demoRocket, LabLog, PartJointRocket, PLANETS, planetById, planetEphemeris, predictCoast, RocketVisual, TerrainColliderLines, TerrainView,
+  demoRocket, LabLog, PartJointRocket, PLANETS, planetEphemeris, predictCoast, RocketVisual, TerrainColliderLines, TerrainView,
   type CoastPrediction, type LanderControl, type RocketPart,
 } from './landingCore';
 import { MapLayer, OrbitCamera, toThree, viewState, type Focus, type FocusGeometry, type ViewState } from './viewCore';
 import { bodyFixedToRender, quatMultiply, vesselAxes } from './FlightFrame';
 import { NavballWidget } from './navballCore';
+import { gamePlanetById } from './GamePlanet';
+import { FlightScenery } from './FlightScenery';
 import './style.css';
 
 const PARTS: readonly RocketPart[] = ['upper', 'booster'];
@@ -43,13 +45,15 @@ window.addEventListener('unhandledrejection', (e) => panic(e.reason));
 
 // ?planet=<id> picks the planet (default Aurelia in the full solar system); changing it reloads the page.
 const planetId = new URLSearchParams(window.location.search).get('planet') ?? 'aurelia';
-const planet = planetById(planetId);
+const gamePlanet = gamePlanetById(planetId, new URLSearchParams(window.location.search).get('terrain'));
+const planet = gamePlanet.planet;
 const terrain = planet.terrain;
 const { ephemeris: eph, bodyIndex } = planetEphemeris(planet);
 const bodies = eph.bodies;
 const home = bodies[bodyIndex]!;
 const dominance = new DominanceTree(bodies);
 const rocket = demoRocket(terrain);
+if (gamePlanet.launchSite) rocket.launchSite = gamePlanet.launchSite;
 await RAPIER.init();
 const launch = () => PartJointRocket.landed(RAPIER, eph, bodyIndex, terrain, rocket.full, rocket.upper, rocket.booster, rocket.options, rocket.launchSite);
 let lander = launch();
@@ -95,10 +99,16 @@ hud.innerHTML = `<div class="box clock"><span id="met"></span><span class="warp"
 <aside class="box dev collapsed" id="dev">
   <div class="click caption" id="dev-head">DEV <kbd>\`</kbd></div>
   <div class="dev-body">
-    <div class="title">FLIGHT LAB <small>landing + orbit + single view</small></div>
+    <div class="title">VOID <small>flight + scenery</small></div>
     <div class="sub" id="badge"></div>
     <label>Planet<select id="planet">${Object.keys(PLANETS).map((id) => `<option value="${id}">${id}</option>`).join('')}</select></label>
+    <label>Terrain<select id="terrain"><option value="layered">Scenery layered</option><option value="hills">Landing hills</option></select></label>
     <label class="check"><input id="terrain-visible" type="checkbox" checked> Draw terrain (profiling)</label>
+    <label class="check"><input id="air" type="checkbox" ${gamePlanet.atmosphere ? 'checked' : 'disabled'}> Atmosphere (visual)</label>
+    <label class="check"><input id="clouds" type="checkbox" ${gamePlanet.atmosphere ? 'checked' : 'disabled'}> Clouds</label>
+    <label class="check"><input id="ocean" type="checkbox" ${gamePlanet.ocean ? 'checked' : ''} ${gamePlanet.atmosphere ? '' : 'disabled'}> Ocean (visual)</label>
+    <label class="check"><input id="stars" type="checkbox" checked> Stars</label>
+    <label>Exposure<input id="exposure" type="range" min="-1" max="2" step="0.05" value="0.8"></label>
     <label class="check"><input id="wire" type="checkbox"> Mesh edges (white)</label>
     <label class="check"><input id="bounds" type="checkbox"> Tile boundaries (red)</label>
     <label class="check"><input id="colliders" type="checkbox"> Colliders: terrain and rocket (green)</label>
@@ -120,7 +130,13 @@ const element = <T extends HTMLElement>(selector: string): T => {
   return found;
 };
 const planetInput = element<HTMLSelectElement>('#planet');
+const terrainInput = element<HTMLSelectElement>('#terrain');
 const terrainVisibleInput = element<HTMLInputElement>('#terrain-visible');
+const airInput = element<HTMLInputElement>('#air');
+const cloudsInput = element<HTMLInputElement>('#clouds');
+const oceanInput = element<HTMLInputElement>('#ocean');
+const starsInput = element<HTMLInputElement>('#stars');
+const exposureInput = element<HTMLInputElement>('#exposure');
 const wireInput = element<HTMLInputElement>('#wire');
 const boundsInput = element<HTMLInputElement>('#bounds');
 const collidersInput = element<HTMLInputElement>('#colliders');
@@ -181,26 +197,46 @@ planetInput.value = planetId;
 planetInput.addEventListener('change', () => {
   const next = new URL(window.location.href);
   next.searchParams.set('planet', planetInput.value);
+  next.searchParams.delete('terrain');
+  window.location.assign(next.href);
+});
+terrainInput.value = gamePlanet.terrainId;
+terrainInput.querySelector<HTMLOptionElement>('option[value="layered"]')!.disabled = !gamePlanet.atmosphere;
+terrainInput.addEventListener('change', () => {
+  const next = new URL(window.location.href);
+  next.searchParams.set('terrain', terrainInput.value);
   window.location.assign(next.href);
 });
 
 // WebGPU renderer on its WebGL2 backend, as lab/lod, lab/landing and lab/view use, for lab/lod's node-material tiles.
-const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: true, logarithmicDepthBuffer: true });
+const renderer = new THREE.WebGPURenderer({ antialias: false, forceWebGL: true, logarithmicDepthBuffer: true });
 if (!(window.devicePixelRatio > 0)) throw new Error(`invalid devicePixelRatio ${window.devicePixelRatio}`);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setClearColor(0x03040a);
+renderer.setPixelRatio(1);
+renderer.setClearColor(0x000000);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
 app.append(renderer.domElement);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(58, 1, 1, 2);
 // Enough ambient light to fly on the night side.
-scene.add(new THREE.AmbientLight(0xcbe7ff, 0.35));
-const sunLight = new THREE.DirectionalLight(0xfff0dc, 3);
+scene.add(new THREE.AmbientLight(0xcbe7ff, 0.02));
+const sunLight = new THREE.DirectionalLight(0xffffff, 1);
 scene.add(sunLight);
+const scenery = new FlightScenery(renderer, scene, gamePlanet);
+function applyScenerySettings(): void {
+  scenery.atmosphere.enabled.value = airInput.checked ? 1 : 0;
+  scenery.clouds.enabled.value = cloudsInput.checked ? 1 : 0;
+  scenery.ground.oceanEnabled.value = oceanInput.checked ? 1 : 0;
+  scenery.stars.points.visible = starsInput.checked;
+  renderer.toneMappingExposure = 10 ** Number(exposureInput.value);
+}
+for (const input of [airInput, cloudsInput, oceanInput, starsInput, exposureInput]) input.addEventListener('input', applyScenerySettings);
+applyScenerySettings();
 
 // Tiles and rocket attitudes come in the planet's body-fixed axes; this group turns tiles into the inertial scene.
 const bodyFixedGroup = new THREE.Group();
 scene.add(bodyFixedGroup);
-const terrainView = new TerrainView(terrain, planet.terrainConfig, rocket.options.contact, Math.max(1, navigator.hardwareConcurrency - 1), (e) => panic(e));
+const terrainView = new TerrainView(terrain, planet.terrainConfig, rocket.options.contact, Math.min(2, navigator.hardwareConcurrency), (e) => panic(e));
+terrainView.tiles.setMaterial(scenery.ground.material);
 // lab/lod's camera LOD: the same split table, stopping one level above the collision level (about
 // twice its cell size), so ground far from the rocket does not grow a second collision-level region.
 // The rocket's own detail stops where its cells would be under 2 px on screen; collision terrain is
@@ -225,6 +261,10 @@ const partMeshes: Record<RocketPart, THREE.Group> = { upper: visual.upper, boost
 
 let focus: Focus = { kind: 'vessel' };
 const map = new MapLayer(scene, overlay, eph, [bodyIndex], (picked) => setFocus(picked));
+// In the solar system the map already draws the real Sun at its barycentric position.
+scenery.atmosphere.sunDiscEnabled.value = map.starIndex === bodyIndex ? 1 : 0;
+const renderToBody = new THREE.Matrix4();
+const renderRotation = new THREE.Quaternion();
 // Start looking at the rocket from the side, a little above the horizon.
 const startRadial = normalize(sub(lander.frame.toInertial(0, lander.partState('upper')).position, eph.bodyPosition(bodyIndex, 0)));
 const startSide = normalize({ x: -startRadial.y, y: startRadial.x, z: 0 });
@@ -237,7 +277,9 @@ const bodyPosition = (i: number): Vec3 => ({ x: bodyPositions[i * 3]!, y: bodyPo
 const bodyVelocity = (i: number): Vec3 => ({ x: bodyVelocities[i * 3]!, y: bodyVelocities[i * 3 + 1]!, z: bodyVelocities[i * 3 + 2]! });
 
 const log = import.meta.env.DEV ? new LabLog('flight', (e) => panic(e)) : null;
-log?.write({ event: 'session', planet: planetId, lod: terrainView.lod.options });
+log?.write({ event: 'session', planet: planetId, terrain: gamePlanet.terrainId, lod: terrainView.lod.options,
+  scenery: { seaLevel: gamePlanet.seaLevel, atmosphere: gamePlanet.atmosphere,
+    atmosphereBuildMs: scenery.atmosphere.buildMilliseconds, cloudBuildMs: scenery.clouds.buildMilliseconds } });
 terrainVisibleInput.addEventListener('change', () => log?.write({ event: 'terrain-visibility', visible: terrainVisibleInput.checked, simTime: lander.time }));
 
 function focusName(f: Focus): string {
@@ -317,7 +359,10 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 function resize(): void {
+  // Keep the scenery lab's drawing budget; CSS size and map labels use the full viewport.
+  renderer.setPixelRatio(Math.min(1, 1920 / window.innerWidth, 1080 / window.innerHeight));
   renderer.setSize(window.innerWidth, window.innerHeight);
+  scenery.pipeline.resize(renderer.domElement.width, renderer.domElement.height);
   camera.aspect = window.innerWidth / window.innerHeight;
 }
 window.addEventListener('resize', resize);
@@ -390,6 +435,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) last
 
 function frameLoop(nowMs: number): void {
   if (stopped) return;
+  if (document.hidden) { last = nowMs; requestAnimationFrame(frameLoop); return; }
   try {
     timePhase('frame', nowMs - last);
     timings.frames += 1;
@@ -434,11 +480,15 @@ function frameLoop(nowMs: number): void {
     camera.far = 1e14;
     camera.updateProjectionMatrix();
     camera.updateMatrixWorld();
-    toThree(normalize(sub(bodyPosition(map.starIndex), origin)), sunLight.position);
+    // Lone-body labs have an explicitly fixed inertial light; solar-system flights use the real Sun.
+    const sunEcliptic = map.starIndex === bodyIndex ? { x: 1, y: 0, z: 0 }
+      : normalize(sub(bodyPosition(map.starIndex), bodyPosition(bodyIndex)));
+    toThree(sunEcliptic, sunLight.position);
 
     const axes = bodyOrientation(home, t);
     const toRender = bodyFixedToRender(axes);
     bodyFixedGroup.quaternion.set(toRender.x, toRender.y, toRender.z, toRender.w);
+    renderToBody.makeRotationFromQuaternion(renderRotation.copy(bodyFixedGroup.quaternion).invert());
     // lab/lod's observers: every live part (the probe), plus the camera, which also alone decides
     // horizon culling. Tiles are placed relative to the render origin.
     const cameraPosition = { x: origin.x + cameraOffset.x, y: origin.y + cameraOffset.y, z: origin.z + cameraOffset.z };
@@ -446,8 +496,14 @@ function frameLoop(nowMs: number): void {
     const observers = liveParts().map((which) => lander.partState(which).position);
     const lodStarted = performance.now();
     const renderOrigin = bodyFixed(origin);
-    const focalPixels = window.innerHeight / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
-    const selection = terrainView.update(observers, renderOrigin, { position: bodyFixed(cameraPosition), focalPixels, ...CAMERA_LOD });
+    const focalPixels = renderer.domElement.height / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+    const cameraBodyFixed = bodyFixed(cameraPosition);
+    const selection = terrainView.update(observers, renderOrigin, { position: cameraBodyFixed, focalPixels, ...CAMERA_LOD });
+    const sunBodyFixed = { x: axes.x.x * sunEcliptic.x + axes.x.y * sunEcliptic.y + axes.x.z * sunEcliptic.z,
+      y: axes.y.x * sunEcliptic.x + axes.y.y * sunEcliptic.y + axes.y.z * sunEcliptic.z,
+      z: axes.z.x * sunEcliptic.x + axes.z.y * sunEcliptic.y + axes.z.z * sunEcliptic.z };
+    scenery.update({ cameraBodyFixed, renderOriginBodyFixed: renderOrigin, sunBodyFixed,
+      renderToBody, camera, focalPixels, time: t });
     timePhase('select', selection.selectMilliseconds);
     timePhase('traverse', selection.traversalMilliseconds);
     timePhase('balance', selection.balanceMilliseconds);
@@ -488,7 +544,7 @@ function frameLoop(nowMs: number): void {
     hudText.heading.textContent = `HDG ${String(Math.round(reading.heading) % 360).padStart(3, '0')}° · ${reading.pitch >= 0 ? '+' : ''}${reading.pitch.toFixed(0)}°`;
 
     const drawStarted = performance.now();
-    renderer.render(scene, camera);
+    scenery.pipeline.render(scene, camera);
     timePhase('draw', performance.now() - drawStarted);
 
     if (nowMs - lastReadout > 100) {
@@ -501,10 +557,12 @@ function frameLoop(nowMs: number): void {
       log.write({ event: 'flight-sample', simTime: t, timeRate, mode: lander.mode, stage: stageNumber, focus: focusName(focus), distance: orbitCamera.distance,
         mapWeight: state.mapWeight, corotation: state.corotation, altitude: geometry.kind === 'vessel' ? geometry.altitude : null,
         terrainVisible: terrainVisibleInput.checked,
+        scenery: { atmosphere: airInput.checked, clouds: cloudsInput.checked, ocean: oceanInput.checked,
+          width: renderer.domElement.width, height: renderer.domElement.height },
         tiles: selection.render.length, culled: selection.culled.horizon, requests: selection.requests.length, queued: terrainView.queuedBuilds,
         tileStats: { cached: terrainView.lod.cachedTileCount, cacheBytes: terrainView.lod.cachedMeshBytes,
           rendererCopyBytes: terrainView.tiles.rendererCopyBytes, created: tileChanges.created, disposed: tileChanges.disposed,
-          sceneDrawCalls: renderer.info.render.drawCalls, sceneTriangles: renderer.info.render.triangles },
+          sceneDrawCalls: scenery.pipeline.sceneStats.drawCalls, sceneTriangles: scenery.pipeline.sceneStats.triangles },
         perf: { frames: timings.frames, frameMs: phase(timings.frame), physicsMs: phase(timings.physics), lodMs: phase(timings.lod),
           selectMs: phase(timings.select), traverseMs: phase(timings.traverse), balanceMs: phase(timings.balance), evictMs: phase(timings.evict),
           queueMs: phase(timings.queue), syncMs: phase(timings.sync), colliderMs: phase(timings.collider), drawMs: phase(timings.draw) } });
@@ -591,6 +649,7 @@ function updateText(upper: { position: Vec3; velocity: Vec3 }, navigation: numbe
     `focus   ${focusName(focus)}${focus.kind === 'vessel' ? ` (reference ${reference.name})` : ''}`,
     `camera  ${formatDistance(orbitCamera.distance)} · map ${(state.mapWeight * 100).toFixed(0)}% · up ${(state.upWeight * 100).toFixed(0)}% · co-rotate ${(state.corotation * 100).toFixed(0)}%`,
     `tiles   ${tiles} selected, ${terrainView.queuedBuilds} building`,
+    `scenery ${renderer.domElement.width}×${renderer.domElement.height} · sea ${formatDistance(gamePlanet.seaLevel)} · visual air/water`,
   ].join('\n');
 }
 

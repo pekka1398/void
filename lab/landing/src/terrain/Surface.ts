@@ -12,7 +12,8 @@ export interface SurfaceSample {
   readonly color: readonly [number, number, number];
 }
 
-export type SurfaceSampler = (bodyFixedDirection: Vec3) => SurfaceSample;
+/** Optional cell size band-limits geometry; point queries request full detail. */
+export type SurfaceSampler = (bodyFixedDirection: Vec3, cellMeters?: number) => SurfaceSample;
 
 /** A planet's solid surface: the sampler plus the bounds everything else relies on. */
 export interface Terrain {
