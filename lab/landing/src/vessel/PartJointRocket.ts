@@ -18,7 +18,7 @@ const FLIGHT_CHUNK_SECONDS = 1;
 const ENTRY_SNAP_METERS = 0.1;
 const PARTS: readonly RocketPart[] = ['upper', 'booster'];
 /** Steering torque per unit of control.turn, N m, about the upper stage's local axes. */
-const STEERING_TORQUE = 6000;
+export const STEERING_TORQUE = 6000;
 
 function addScaled(a: Vec3, b: Vec3, k: number): Vec3 {
   return { x: a.x + b.x * k, y: a.y + b.y * k, z: a.z + b.z * k };
@@ -248,6 +248,7 @@ export class PartJointRocket {
   advance(dt: number, control: LanderControl): void {
     if (!(dt >= 0) || !Number.isFinite(dt)) throw new RangeError(`PartJointRocket.advance(${dt})`);
     if (!(control.throttle >= 0 && control.throttle <= 1)) throw new RangeError(`PartJointRocket: throttle ${control.throttle}`);
+    if (control.turn && control.steering) throw new Error('PartJointRocket: give either turn or steering, not both');
     if (this.parts.upper.wreck) return;
     if (control.orbitalAttitude && (this.contactWorlds().length > 0 || !control.rotation)) {
       throw new Error('PartJointRocket: orbital maneuver requires free flight and a commanded orientation');
@@ -362,8 +363,9 @@ export class PartJointRocket {
       push = { x: direction.x * thrust / meanMass, y: direction.y * thrust / meanMass, z: direction.z * thrust / meanMass };
     }
     const upperBody = this.parts.upper.body;
-    if (control.turn && upperBody) {
-      const torque = rotate(upperBody.rotation(), control.turn);
+    const turn = upperBody ? this.turnFor(this.separated ? ['upper'] : PARTS, control, upperBody.rotation(), upperBody.angvel(), step) : null;
+    if (turn && upperBody) {
+      const torque = rotate(upperBody.rotation(), turn);
       upperBody.applyTorqueImpulse({ x: torque.x * STEERING_TORQUE * step, y: torque.y * STEERING_TORQUE * step, z: torque.z * STEERING_TORQUE * step }, true);
     }
     const before = engine.push;
@@ -513,22 +515,38 @@ export class PartJointRocket {
     return inertia;
   }
 
-  /** Steering acts on the controlled unit: the attached stack, or the upper stage after staging. */
-  private steeringTorque(parts: readonly RocketPart[], control: LanderControl): Vec3 {
-    if (!control.turn || !parts.includes('upper')) return ZERO;
-    return { x: control.turn.x * STEERING_TORQUE, y: control.turn.y * STEERING_TORQUE, z: control.turn.z * STEERING_TORQUE };
+  /** Inertia of the controlled unit (the attached stack, or the upper stage after staging) in the upper stage's local axes, kg m^2. */
+  controlledInertia(): Mat3 {
+    return this.unitInertia(this.separated ? ['upper'] : PARTS);
+  }
+
+  /**
+   * The turn command for one step of the unit `parts`, or null when it is not steered. Steering acts on the
+   * controlled unit (the attached stack, or the upper stage after staging); a per-step steering law is called
+   * here exactly once per physics step, with the attitude at the start of the step.
+   */
+  private turnFor(parts: readonly RocketPart[], control: LanderControl, rotation: Quaternion, angularVelocity: Vec3, dt: number): Vec3 | null {
+    if (!parts.includes('upper')) return null;
+    if (!control.steering) return control.turn ?? null;
+    const turn = control.steering({ rotation, angularVelocity, inertiaLocal: this.unitInertia(parts) }, dt);
+    for (const v of [turn.x, turn.y, turn.z]) if (!(v >= -1 && v <= 1)) throw new RangeError(`PartJointRocket: steering returned ${JSON.stringify(turn)}`);
+    return turn;
   }
 
   private attitudeChanging(parts: readonly RocketPart[], control: LanderControl): boolean {
     const w = this.parts[parts[0]!].angularVelocity;
-    const torque = this.steeringTorque(parts, control);
-    return Math.hypot(w.x, w.y, w.z) > 1e-9 || torque.x !== 0 || torque.y !== 0 || torque.z !== 0;
+    // A steering law may command torque on any step, so its unit is always stepped with its attitude.
+    if (control.steering && parts.includes('upper')) return true;
+    const turn = parts.includes('upper') ? control.turn : undefined;
+    return Math.hypot(w.x, w.y, w.z) > 1e-9 || (turn !== undefined && (turn.x !== 0 || turn.y !== 0 || turn.z !== 0));
   }
 
   /** One attitude step for a unit in orbital flight; attached parts share the upper stage's attitude. */
   private stepFlightAttitude(parts: readonly RocketPart[], control: LanderControl, dt: number): void {
     const lead = this.parts[parts[0]!];
-    const next = stepAttitude(lead.rotation, lead.angularVelocity, this.unitInertia(parts), this.steeringTorque(parts, control), ANGULAR_DAMPING, dt);
+    const turn = this.turnFor(parts, control, lead.rotation, lead.angularVelocity, dt) ?? ZERO;
+    const torque = { x: turn.x * STEERING_TORQUE, y: turn.y * STEERING_TORQUE, z: turn.z * STEERING_TORQUE };
+    const next = stepAttitude(lead.rotation, lead.angularVelocity, this.unitInertia(parts), torque, ANGULAR_DAMPING, dt);
     for (const which of parts) {
       this.parts[which].rotation = next.rotation;
       this.parts[which].angularVelocity = next.angularVelocity;

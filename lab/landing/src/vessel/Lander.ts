@@ -36,7 +36,22 @@ export interface LanderControl {
   rotation?: Quaternion;
   /** Angular steering about the craft's local pitch, roll and yaw axes. */
   turn?: Vec3;
+  /** Steering recomputed every physics step (lab/sas's stability assist); excludes `turn`. PartJointRocket only. */
+  steering?: Steering;
 }
+
+/** The controlled unit's attitude at the start of a physics step, as a per-step steering law sees it. */
+export interface AttitudeSample {
+  /** Upper stage's orientation in the body-fixed planet frame. */
+  rotation: Quaternion;
+  /** Body-fixed planet frame, rad/s. */
+  angularVelocity: Vec3;
+  /** Inertia of the controlled unit (stack or upper stage) about its centre of mass, kg m^2, in the upper stage's local axes. */
+  inertiaLocal: import('./Attitude').Mat3;
+}
+
+/** Returns the `turn` command (each axis in [-1, 1]) for the coming step of dt seconds. */
+export type Steering = (sample: AttitudeSample, dt: number) => Vec3;
 
 export type LanderMode = 'flight' | 'contact';
 
@@ -169,6 +184,7 @@ export class Lander {
    * than one step; time is never skipped.
    */
   advance(dt: number, control: LanderControl): void {
+    if (control.steering) throw new Error('Lander: per-step steering is only supported by PartJointRocket');
     if (!(dt >= 0) || !Number.isFinite(dt)) throw new RangeError(`Lander.advance(${dt})`);
     if (!(control.throttle >= 0 && control.throttle <= 1)) throw new RangeError(`throttle ${control.throttle}`);
     const target = this.time + dt;
