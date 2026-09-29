@@ -32,7 +32,8 @@ npm run typecheck
   - Zooming out from about 4 km (where the rocket is about 1 px) to 40 km fades in the map: orbits, labels, the rocket's forecast path and its Pe/Ap. The camera does not turn meanwhile, nor up to 400 km.
   - Then, from 400 km to 4,000 km, up turns from the local vertical to north, and the camera stops turning with the ground.
   - `Tab` or clicking a label focuses a body.
-- **Map path.** It is the landing lab's coast forecast (`predictCoast`), recomputed every 2 s of simulated time. It is drawn from its inertial trajectory relative to the dominant body, and ends at the terrain.
+- **Map path.** The blue path is the landing lab's coast forecast (`predictCoast`), recomputed every 2 s of simulated time. The orange path is orbit lab's finite-burn `FlightPlan` when maneuvers exist. Both are drawn relative to the dominant body.
+- **Maneuvers.** After separating the upper stage in free flight, the lower-right panel edits orbit lab's multi-burn plan: start time, prograde/normal/radial Δv, fixed or automatic reference body, Pe/Ap placement, and warp to 30 s before ignition. Burns execute at full upper-stage thrust in Frenet coordinates; planned orientation is also applied to the rocket visual. The plan is re-anchored to live flight while coasting and after each burn. Staging remains manual.
 - **Rocket.** It is sized KSP-style to reach low orbit on Aurelia without atmospheric forces (the new air is visual only): 8.6 km/s of Δv in all.
   - Booster: 120 kN, Isp 310 s, liftoff thrust-to-weight about 2, 3.4 km/s, 101 s burn.
   - Upper stage: 20 kN, Isp 340 s, thrust-to-weight about 1.5, 5.1 km/s, 183 s burn.
@@ -86,5 +87,5 @@ One row of rates, after KSP's two warps but without showing two modes: 1×, 2×,
 
 ## Not here yet
 
-- **Map interaction:** manoeuvre nodes and the flight plan (lab/orbit has them).
+- **Map interaction:** direct dragging of maneuver nodes on the map is not implemented; the maneuver panel edits the plan.
 - Atmospheric forces, sea buoyancy, terrain on other bodies, docking. Clouds remain static and do not cast ground shadows. Sea rendering raises submerged vertices to sea level; collision terrain remains the solid seabed.

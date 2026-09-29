@@ -37,6 +37,7 @@ export interface MapFrame {
   vessel: Vec3;
   vesselVelocity: Vec3;
   path: VesselPath | null;
+  planPath?: VesselPath | null;
   /** 0 hides the map, 1 shows it fully. */
   mapWeight: number;
   focus: Focus;
@@ -66,6 +67,11 @@ export class MapLayer {
   private readonly vesselMarker: HTMLDivElement;
   private readonly pathGeometry = new THREE.BufferGeometry();
   private readonly pathLine: THREE.Line;
+  private readonly planGeometry = new THREE.BufferGeometry();
+  private readonly planLine: THREE.Line;
+  private planCache: PathCache | null = null;
+  private planGeneration = -1;
+  private planReference = -1;
   private pathCache: PathCache | null = null;
   private pathGeneration = -1;
   private pathReference = -1;
@@ -110,6 +116,11 @@ export class MapLayer {
     this.pathLine.frustumCulled = false;
     this.pathLine.renderOrder = 11;
     scene.add(this.pathLine);
+    this.planGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(1024 * 3), 3));
+    this.planLine = new THREE.Line(this.planGeometry, this.lineMaterial('#ffca66'));
+    this.planLine.frustumCulled = false;
+    this.planLine.renderOrder = 12;
+    scene.add(this.planLine);
     this.apsisMarkers = [0, 1].map(() => this.createMarker('', PATH_COLOR, 'event'));
   }
 
@@ -126,9 +137,11 @@ export class MapLayer {
     for (const view of this.views) if (view.sphere) toThree(sub(position(view.body.index), frame.origin), view.sphere.position);
     this.updateOrbits(frame.origin, position, velocity);
     this.updatePath(frame, position, velocity);
+    this.updatePlanPath(frame, position, velocity);
     for (const material of this.lineMaterials) material.opacity = frame.mapWeight;
     for (const view of this.views) if (view.orbit) view.orbit.visible = frame.mapWeight > 0;
     this.pathLine.visible &&= frame.mapWeight > 0;
+    this.planLine.visible &&= frame.mapWeight > 0;
     this.placeMarkers(frame, position);
   }
 
@@ -208,6 +221,36 @@ export class MapLayer {
         relative: sub(apsis.position, this.ephemeris.bodyPosition(reference, apsis.time)),
       }));
     }
+  }
+
+  private updatePlanPath(frame: MapFrame, position: (i: number) => Vec3, velocity: (i: number) => Vec3): void {
+    const path = frame.planPath;
+    if (!path || path.trajectory.count < 2 || path.trajectory.lastTime <= frame.time) {
+      this.planLine.visible = false;
+      return;
+    }
+    const trajectory = path.trajectory;
+    const reference = path.reference;
+    const referenceNow = position(reference);
+    if (!this.planCache || this.planGeneration !== path.generation || this.planReference !== reference) {
+      this.planGeneration = path.generation;
+      this.planReference = reference;
+      const osc = osculatingOrbit(sub(frame.vessel, referenceNow), sub(frame.vesselVelocity, velocity(reference)), this.bodies[reference]!.gm);
+      const span = trajectory.lastTime - trajectory.firstTime;
+      const natural = Number.isFinite(osc.periodSeconds) ? osc.periodSeconds : span;
+      this.planCache = new PathCache(Math.max(natural / 256, span / 6000));
+    }
+    this.planCache.update(Math.max(frame.time, trajectory.firstTime), trajectory.lastTime,
+      (t) => sub(trajectory.sample(t).position, this.ephemeris.bodyPosition(reference, t)));
+    let attribute = this.planGeometry.getAttribute('position') as THREE.BufferAttribute;
+    if (attribute.count < this.planCache.count + 1) {
+      attribute = new THREE.BufferAttribute(new Float32Array((this.planCache.count + 1) * 2 * 3), 3);
+      this.planGeometry.setAttribute('position', attribute);
+    }
+    const written = this.planCache.writeRelative(attribute.array as Float32Array, sub(frame.origin, referenceNow), sub(frame.vessel, referenceNow), null, 1);
+    attribute.needsUpdate = true;
+    this.planGeometry.setDrawRange(0, written);
+    this.planLine.visible = frame.mapWeight > 0;
   }
 
   private placeMarker(marker: HTMLDivElement, relative: Vec3, frame: MapFrame): { x: number; y: number } | null {

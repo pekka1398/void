@@ -66,6 +66,16 @@ canvas:active { cursor: grabbing; }
 .hud .navball canvas { display: block; cursor: default; }
 
 .hud .orbit { right: 12px; top: 50%; transform: translateY(-50%); min-width: 170px; }
+.hud .maneuver { right: 12px; bottom: 45px; width: 265px; max-height: 43vh; overflow: auto; }
+.hud .maneuver select, .hud .maneuver input, .hud .maneuver button { background: #141925; color: #dfe6f3; border: 1px solid #39445d; border-radius: 3px; font: inherit; }
+.hud .maneuver button { cursor: pointer; padding: 2px 6px; }
+.hud .maneuver button:hover { color: #fff; border-color: #8395bc; }
+.hud .maneuver-actions { display: flex; gap: 5px; margin: 5px 0; }
+.hud .maneuver #plan-list { display: block; width: 100%; box-sizing: border-box; }
+.hud .maneuver-fields { display: grid; gap: 4px; margin-top: 6px; }
+.hud .maneuver-fields label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.hud .maneuver-fields input, .hud .maneuver-fields select { width: 105px; box-sizing: border-box; }
+.hud .maneuver #plan-status { color: #ffd479; font-size: 11px; }
 
 .hud .dev { top: 12px; right: 12px; width: 340px; max-height: calc(100% - 24px); overflow: auto; }
 .hud .dev.collapsed { width: auto; }

@@ -249,15 +249,24 @@ export class PartJointRocket {
     if (!(dt >= 0) || !Number.isFinite(dt)) throw new RangeError(`PartJointRocket.advance(${dt})`);
     if (!(control.throttle >= 0 && control.throttle <= 1)) throw new RangeError(`PartJointRocket: throttle ${control.throttle}`);
     if (this.parts.upper.wreck) return;
+    if (control.orbitalAttitude && (this.contactWorlds().length > 0 || !control.rotation)) {
+      throw new Error('PartJointRocket: orbital maneuver requires free flight and a commanded orientation');
+    }
     if (control.rotation) {
       for (const which of this.separated ? ['upper' as const] : PARTS) {
-        if (!this.parts[which].body) this.parts[which].rotation = { ...control.rotation };
+        if (!this.parts[which].body) {
+          this.parts[which].rotation = { ...control.rotation };
+          if (control.orbitalAttitude) this.parts[which].angularVelocity = ZERO;
+        }
       }
     }
     const target = this.simTime + this.pendingSeconds + dt;
     const step = this.options.contact.stepSeconds;
     for (;;) {
       this.updateModes(control);
+      if (control.orbitalAttitude && this.contactWorlds().length > 0) {
+        throw new Error('PartJointRocket: orbital maneuver entered contact physics');
+      }
       if (this.parts.upper.wreck) { this.pendingSeconds = 0; return; }
       if (this.contactWorlds().length > 0) {
         if (this.simTime + step > target + 1e-12) { this.pendingSeconds = Math.max(0, target - this.simTime); return; }
@@ -371,7 +380,7 @@ export class PartJointRocket {
     for (const which of PARTS) {
       const run = this.parts[which].run;
       if (!run) continue;
-      this.propagate(run, t1, which === this.enginePart ? which : null, control.throttle);
+      this.propagate(run, t1, which === this.enginePart ? which : null, control.throttle, control);
       this.stepFlightAttitude([which], control, step);
     }
     this.simTime = t1;
@@ -421,7 +430,7 @@ export class PartJointRocket {
       // Thrust follows the attitude, which the integrator holds fixed over a call: while it turns, advance one step at a time.
       if (thrusting && this.attitudeChanging(unit.parts, control)) end = Math.min(end, this.simTime + this.options.contact.stepSeconds);
     }
-    for (const unit of units) this.propagate(unit.run, end, unit.parts.includes(this.enginePart) ? this.enginePart : null, control.throttle);
+    for (const unit of units) this.propagate(unit.run, end, unit.parts.includes(this.enginePart) ? this.enginePart : null, control.throttle, control);
     const step = this.options.contact.stepSeconds;
     if (attitude) {
       for (const unit of units) {
@@ -432,9 +441,9 @@ export class PartJointRocket {
   }
 
   /** Propagate an orbit state to `end`, splitting at burnout and charging the engine part's fuel. */
-  private propagate(run: PropagationRun, end: number, engine: RocketPart | null, throttle: number): void {
+  private propagate(run: PropagationRun, end: number, engine: RocketPart | null, throttle: number, command?: LanderControl): void {
     while (run.time + 1e-12 < end) {
-      const thrust = engine ? this.flightControl(engine, throttle, run.time) : null;
+      const thrust = engine ? this.flightControl(engine, throttle, run.time, command?.orbitalAttitude) : null;
       const start = run.time;
       let stop = end;
       if (thrust) {
@@ -453,7 +462,7 @@ export class PartJointRocket {
     }
   }
 
-  private flightControl(which: RocketPart, throttle: number, time: number): ThrustControl | null {
+  private flightControl(which: RocketPart, throttle: number, time: number, orbitalAttitude?: LanderControl['orbitalAttitude']): ThrustControl | null {
     const slot = this.parts[which];
     if (throttle <= 0 || slot.fuelKg <= 0) return null;
     const direction = this.toInertialDirection(rotate(slot.rotation, { x: 0, y: 1, z: 0 }), time);
@@ -461,7 +470,7 @@ export class PartJointRocket {
       ? this.upperSpec.dryMassKg
       : this.upperSpec.dryMassKg + this.boosterSpec.dryMassKg + this.parts.upper.fuelKg;
     return { thrustNewtons: throttle * slot.spec.thrustNewtons, exhaustVelocity: slot.spec.specificImpulseSeconds * STANDARD_GRAVITY,
-      minimumMassKg, attitude: { kind: 'inertial', direction } };
+      minimumMassKg, attitude: orbitalAttitude ?? { kind: 'inertial', direction } };
   }
 
   /** Apply band crossings (with hysteresis), then keep contact worlds local. */

@@ -1,6 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
-import { bodyOrientation, cross, DominanceTree, dot, length, normalize, spinAxis, sub, type Vec3 } from '../../src/orbitCore';
+import { bodyOrientation, cross, DominanceTree, dot, FlightPlan, length, normalize, PropagationRun, spinAxis, STANDARD_GRAVITY, sub, type Vec3 } from '../../src/orbitCore';
 import { demoRocket, planetEphemeris, predictCoast, PartJointRocket, type LanderControl } from '../../src/landingCore';
 import { OrbitCamera, viewState } from '../view/src/ViewCamera';
 import { bodyFixedToRender, quatMultiply, quatRotate, renderAxes, vesselAxes } from '../../src/FlightFrame';
@@ -192,6 +192,35 @@ const launch = () => PartJointRocket.landed(RAPIER, ephemeris, bodyIndex, planet
   }
   check('scenery rays and terrain stay body-fixed across focus offsets and planet rotation', worst < 1e-7,
     `largest frame difference ${worst.toExponential(1)}; independent near-ground and orbital camera offsets`);
+}
+
+{
+  // The upper stage consumes the same fuel and follows the same finite Frenet burn as orbit's FlightPlan.
+  const lander = launch();
+  const idle: LanderControl = { throttle: 0, up: 1, prograde: 0 };
+  lander.advance(2, idle);
+  lander.advance(60, { ...idle, throttle: 1 });
+  lander.separate();
+  const live = lander.frame.toInertial(lander.time, lander.partState('upper'));
+  const plan = new FlightPlan(ephemeris, rocket.options.tolerances, {
+    thrustNewtons: rocket.upper.thrustNewtons, exhaustVelocity: rocket.upper.specificImpulseSeconds * STANDARD_GRAVITY,
+    dryMassKg: rocket.upper.dryMassKg,
+  }, 60);
+  plan.rebase(new PropagationRun({ time: lander.time, ...live, massKg: lander.massKg }));
+  plan.add({ startTime: lander.time + 2, referenceBody: bodyIndex, referenceMode: 'fixed', prograde: 5, normal: 0, radial: 0 });
+  plan.extend(100_000);
+  const burn = plan.burns[0]!;
+  lander.advance(2, idle);
+  lander.advance(burn.endTime - burn.startTime, { ...idle, throttle: 1,
+    orbitalAttitude: { kind: 'frenet', referenceBody: bodyIndex, tangent: 1, normal: 0, radial: 0 },
+    rotation: { x: 0, y: 0, z: 0, w: 1 } });
+  const actual = lander.frame.toInertial(lander.time, lander.partState('upper'));
+  const expected = plan.trajectory.sample(lander.time);
+  const positionError = length(sub(actual.position, expected.position));
+  const fuelError = Math.abs(lander.massKg - burn.massAfterKg);
+  check('upper-stage maneuver follows orbit flight plan', positionError < 0.1 && fuelError < 1e-6,
+    `position ${positionError.toExponential(2)} m, mass ${fuelError.toExponential(2)} kg`);
+  lander.free();
 }
 
 if (failures > 0) {

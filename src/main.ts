@@ -1,6 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three/webgpu';
-import { bodyOrientation, DominanceTree, normalize, osculatingOrbit, spinAxis, sub, type CelestialBody, type Vec3 } from './orbitCore';
+import { bodyOrientation, cross, dot, DominanceTree, FlightPlan, normalize, osculatingOrbit, PropagationRun, spinAxis, STANDARD_GRAVITY, sub, type CelestialBody, type ManeuverSpec, type Vec3 } from './orbitCore';
 import {
   demoRocket, LabLog, PartJointRocket, PLANETS, planetEphemeris, predictCoast, RocketVisual, TerrainColliderLines, TerrainView,
   type CoastPrediction, type LanderControl, type RocketPart,
@@ -64,6 +64,12 @@ let paused = false;
 let prediction: CoastPrediction | null = null;
 let predictionAt = -Infinity;
 let predictionGeneration = 0;
+let plan: FlightPlan | null = null;
+let selectedManeuver = 0;
+let planMessage = '';
+let executingManeuver = false;
+let warpToManeuver = false;
+const PLAN_STEPS_PER_FRAME = 1500;
 
 /**
  * One row of time rates. Up to PHYSICS_MAX_RATE everything is simulated and the engine may burn;
@@ -96,6 +102,15 @@ hud.innerHTML = `<div class="box clock"><span id="met"></span><span class="warp"
   <div class="box navball" id="navball"><span class="caption" id="heading"></span></div>
 </div>
 <div class="box orbit" id="orbit"><div class="caption" id="orbit-head"></div><pre id="orbit-text"></pre></div>
+<div class="box maneuver" id="maneuver"><div class="caption">MANEUVER · upper stage in flight</div>
+  <div class="maneuver-actions"><button id="plan-add">Add</button><button id="plan-remove">Remove</button><button id="plan-warp">Warp to burn</button></div>
+  <select id="plan-list" size="3"></select>
+  <div class="maneuver-fields"><label>Start T+ s<input id="plan-start" type="number" min="0" step="1"></label>
+  <label>Reference<select id="plan-reference"></select></label>
+  <label>Prograde m/s<input id="plan-prograde" type="number" step="1"></label>
+  <label>Normal m/s<input id="plan-normal" type="number" step="1"></label>
+  <label>Radial m/s<input id="plan-radial" type="number" step="1"></label></div>
+  <div class="maneuver-actions"><button id="plan-pe">At Pe</button><button id="plan-ap">At Ap</button></div><pre id="plan-status"></pre></div>
 <aside class="box dev collapsed" id="dev">
   <div class="click caption" id="dev-head">DEV <kbd>\`</kbd></div>
   <div class="dev-body">
@@ -121,6 +136,7 @@ hud.innerHTML = `<div class="box clock"><span id="met"></span><span class="warp"
 <kbd>,</kbd>/<kbd>.</kbd> time rate · <kbd>P</kbd> pause · <kbd>R</kbd> reset<br>
 Drag: orbit camera · wheel: zoom out into the map<br>
 <kbd>Tab</kbd> or a label: focus · <kbd>\`</kbd> dev panel · <kbd>F1</kbd> keys<br>
+After upper-stage separation in flight, use MANEUVER to plan and execute burns<br>
 Click ALT/AGL and SURFACE/ORBIT to switch them</div>
 <span class="box click help-button" id="help-button"><kbd>F1</kbd> keys</span>`;
 document.body.append(hud);
@@ -142,6 +158,15 @@ const boundsInput = element<HTMLInputElement>('#bounds');
 const collidersInput = element<HTMLInputElement>('#colliders');
 const devPanel = element('#dev');
 const helpCard = element('#help');
+const planPanel = element('#maneuver');
+const planList = element<HTMLSelectElement>('#plan-list');
+const planStart = element<HTMLInputElement>('#plan-start');
+const planReference = element<HTMLSelectElement>('#plan-reference');
+const planPrograde = element<HTMLInputElement>('#plan-prograde');
+const planNormal = element<HTMLInputElement>('#plan-normal');
+const planRadial = element<HTMLInputElement>('#plan-radial');
+const planStatus = element('#plan-status');
+planReference.innerHTML = `<option value="auto">Auto</option>${bodies.map((body) => `<option value="${body.index}">${body.name}</option>`).join('')}`;
 const hudText = {
   met: element('#met'), paused: element('#paused'), altMode: element('#alt-mode'), alt: element('#alt'),
   stageHead: element('#stage-head'), stageHint: element('#stage-hint'),
@@ -293,6 +318,7 @@ function setFocus(next: Focus): void {
 }
 
 function stage(): void {
+  if (executingManeuver) return;
   if (stageNumber === 0) { stageNumber = 1; engineArmed = true; return; }
   if (stageNumber !== 1) return;
   lander.separate();
@@ -307,6 +333,7 @@ function reset(): void {
   stageNumber = 0; engineArmed = false; throttlePercent = 0; paused = false;
   setTimeRate(1);
   prediction = null; predictionAt = -Infinity; predictionGeneration += 1;
+  plan = null; selectedManeuver = 0; planMessage = ''; executingManeuver = false; warpToManeuver = false;
   focus = { kind: 'vessel' };
   orbitCamera.distance = 45;
   log?.write({ event: 'reset' });
@@ -336,6 +363,26 @@ window.addEventListener('keyup', (e) => keys.delete(e.code));
 window.addEventListener('blur', () => keys.clear());
 const axis = (positive: string, negative: string) => Number(keys.has(positive)) - Number(keys.has(negative));
 function command(): LanderControl {
+  if (executingManeuver) {
+    const burn = requirePlan().burns[0];
+    if (!burn || !burn.control || burn.control.attitude.kind !== 'frenet') throw new Error('active maneuver has no orbital burn');
+    const attitude = burn.control.attitude;
+    const vessel = partInertial('upper');
+    const centre = eph.bodyState(attitude.referenceBody, lander.time);
+    const tangent = normalize(sub(vessel.velocity, centre.velocity));
+    const normal = normalize(cross(sub(vessel.position, centre.position), tangent));
+    const radial = cross(tangent, normal);
+    const direction = normalize({ x: tangent.x * attitude.tangent + normal.x * attitude.normal + radial.x * attitude.radial,
+      y: tangent.y * attitude.tangent + normal.y * attitude.normal + radial.y * attitude.radial,
+      z: tangent.z * attitude.tangent + normal.z * attitude.normal + radial.z * attitude.radial });
+    const axes = bodyOrientation(home, lander.time);
+    const local = { x: dot(direction, axes.x), y: dot(direction, axes.y), z: dot(direction, axes.z) };
+    const w = 1 + local.y;
+    const q = w < 1e-12 ? { x: 1, y: 0, z: 0, w: 0 } : { x: local.z, y: 0, z: -local.x, w };
+    const qLength = Math.hypot(q.x, q.y, q.z, q.w);
+    return { throttle: 1, up: 0, prograde: 0, orbitalAttitude: attitude,
+      rotation: { x: q.x / qLength, y: q.y / qLength, z: q.z / qLength, w: q.w / qLength } };
+  }
   return { throttle: engineArmed ? throttlePercent / 100 : 0, up: 1, prograde: 0,
     turn: { x: axis('KeyS', 'KeyW'), y: axis('KeyE', 'KeyQ'), z: axis('KeyD', 'KeyA') } };
 }
@@ -375,7 +422,7 @@ const liveParts = () => PARTS.filter((which) => lander.partMode(which) !== 'dest
  * keep it at physics rates, and the lowest part in orbital flight caps the on-rails rate.
  */
 function warpLimit(): { rate: number; reason: string | null } {
-  const blocker = lander.railsBlocker(engineArmed ? throttlePercent / 100 : 0);
+  const blocker = lander.railsBlocker(executingManeuver ? 1 : engineArmed ? throttlePercent / 100 : 0);
   if (blocker) return { rate: PHYSICS_MAX_RATE, reason: `coasting (${blocker})` };
   const flying = liveParts().filter((which) => lander.partMode(which) === 'flight');
   if (flying.length === 0) return { rate: TIME_RATES[TIME_RATES.length - 1]!, reason: null };
@@ -398,12 +445,126 @@ function partInertial(which: RocketPart): { position: Vec3; velocity: Vec3 } {
   return lander.frame.toInertial(lander.time, lander.partState(which));
 }
 
+function requirePlan(): FlightPlan {
+  if (!plan) throw new Error('maneuver plan is not available');
+  return plan;
+}
+function requireManeuver(): ManeuverSpec {
+  return requirePlan().maneuver(selectedManeuver);
+}
+function planReady(): boolean {
+  return lander.separated && lander.mode === 'flight' && lander.partMode('upper') === 'flight' && stageNumber === 2 && engineArmed && lander.fuelKg > 0;
+}
+function planState(): PropagationRun {
+  const upper = partInertial('upper');
+  return new PropagationRun({ time: lander.time, ...upper, massKg: lander.massKg });
+}
+function makePlan(): FlightPlan {
+  if (!planReady()) throw new Error('Separate the upper stage and reach free flight before planning a maneuver');
+  const next = new FlightPlan(eph, rocket.options.tolerances, {
+    thrustNewtons: rocket.upper.thrustNewtons,
+    exhaustVelocity: rocket.upper.specificImpulseSeconds * STANDARD_GRAVITY,
+    dryMassKg: rocket.upper.dryMassKg,
+  }, PREDICTION_HORIZON_SECONDS);
+  next.rebase(planState());
+  return next;
+}
+function editManeuver(change: (spec: ManeuverSpec) => ManeuverSpec): void {
+  if (executingManeuver && selectedManeuver === 0) throw new Error('Cannot edit a burn in progress');
+  const current = requireManeuver();
+  requirePlan().replace(selectedManeuver, change(current));
+  resolvePlanReferences();
+  planMessage = '';
+}
+function resolvePlanReferences(): void {
+  const active = requirePlan();
+  for (let i = 0; i < active.count; i += 1) {
+    const spec = active.maneuver(i);
+    if (spec.referenceMode !== 'auto') continue;
+    const position = active.positionAt(spec.startTime);
+    if (!position) continue;
+    const positions = new Float64Array(eph.bodyCount * 3);
+    const velocities = new Float64Array(eph.bodyCount * 3);
+    eph.statesAt(spec.startTime, positions, velocities);
+    const referenceBody = dominance.dominant(positions, position);
+    if (referenceBody !== spec.referenceBody) active.replace(i, { ...spec, referenceBody });
+  }
+}
+function planAction(action: () => void): void {
+  try { action(); } catch (error) { planMessage = error instanceof Error ? error.message : String(error); }
+  refreshPlanPanel();
+}
+element('#plan-add').addEventListener('click', () => planAction(() => {
+  if (!plan) plan = makePlan();
+  const last = plan.burns.at(-1);
+  const startTime = Math.max(lander.time, last?.endTime ?? lander.time) + 600;
+  selectedManeuver = plan.add({ startTime, referenceBody: dominance.dominant(bodyPositions, partInertial('upper').position),
+    referenceMode: 'auto', prograde: 0, normal: 0, radial: 0 });
+  resolvePlanReferences();
+  planMessage = '';
+}));
+element('#plan-remove').addEventListener('click', () => planAction(() => {
+  if (executingManeuver && selectedManeuver === 0) throw new Error('Cannot remove a burn in progress');
+  const active = requirePlan();
+  active.remove(selectedManeuver);
+  selectedManeuver = Math.max(0, Math.min(selectedManeuver, active.count - 1));
+  if (active.count === 0) { plan = null; warpToManeuver = false; }
+  planMessage = '';
+}));
+element('#plan-warp').addEventListener('click', () => planAction(() => {
+  const burn = requirePlan().burns[0];
+  if (!burn || burn.startTime <= lander.time + 30) throw new Error('No future executable burn at least 30 s away');
+  warpToManeuver = true; paused = false; throttlePercent = 0;
+}));
+planList.addEventListener('change', () => { selectedManeuver = planList.selectedIndex; refreshPlanPanel(); });
+for (const [input, key] of [[planPrograde, 'prograde'], [planNormal, 'normal'], [planRadial, 'radial']] as const) {
+  input.addEventListener('change', () => planAction(() => editManeuver((spec) => ({ ...spec, [key]: Number(input.value) }))));
+}
+planStart.addEventListener('change', () => planAction(() => editManeuver((spec) => ({ ...spec, startTime: Number(planStart.value) }))));
+planReference.addEventListener('change', () => planAction(() => editManeuver((spec) => planReference.value === 'auto'
+  ? { ...spec, referenceMode: 'auto' }
+  : { ...spec, referenceMode: 'fixed', referenceBody: Number(planReference.value) })));
+for (const [id, kind] of [['#plan-pe', 'periapsis'], ['#plan-ap', 'apoapsis']] as const) {
+  element(id).addEventListener('click', () => planAction(() => {
+    const result = requirePlan().startAtApsis(selectedManeuver, kind, lander.time);
+    if (!result.ok) { planMessage = result.reason; return; }
+    editManeuver((spec) => ({ ...spec, startTime: result.startTime }));
+  }));
+}
+function refreshPlanPanel(): void {
+  planPanel.hidden = !planReady() && !plan;
+  const active = plan;
+  planList.replaceChildren();
+  if (!active || active.count === 0) { planStatus.textContent = planMessage || 'Add a maneuver after upper-stage separation.'; return; }
+  for (let i = 0; i < active.count; i += 1) {
+    const spec = active.maneuver(i), status = active.status(i);
+    const option = document.createElement('option');
+    option.textContent = `${i + 1}. T+${spec.startTime.toFixed(0)} · Δv ${Math.hypot(spec.prograde, spec.normal, spec.radial).toFixed(0)} m/s${status.ok ? '' : ' · blocked'}`;
+    planList.append(option);
+  }
+  selectedManeuver = Math.min(selectedManeuver, active.count - 1);
+  planList.selectedIndex = selectedManeuver;
+  const spec = active.maneuver(selectedManeuver), status = active.status(selectedManeuver);
+  planStart.value = String(spec.startTime);
+  planReference.value = spec.referenceMode === 'auto' ? 'auto' : String(spec.referenceBody);
+  planPrograde.value = String(spec.prograde); planNormal.value = String(spec.normal); planRadial.value = String(spec.radial);
+  const locked = executingManeuver && selectedManeuver === 0;
+  for (const input of [planStart, planReference, planPrograde, planNormal, planRadial]) input.disabled = locked;
+  planStatus.textContent = planMessage || (status.ok
+    ? `Burn ${status.burn.startTime.toFixed(0)}–${status.burn.endTime.toFixed(0)} s · ${(status.burn.massBeforeKg - status.burn.massAfterKg).toFixed(1)} kg fuel${executingManeuver ? ' · FIRING' : ''}`
+    : status.reason);
+}
+
 function updatePrediction(): void {
   if (lander.clearance() < lander.spec.halfExtents.y) { prediction = null; return; }
   if (lander.time - predictionAt < PREDICTION_INTERVAL_SECONDS) return;
   predictionAt = lander.time;
   prediction = predictCoast(eph, lander.frame, terrain, rocket.options.tolerances, lander.time, lander.bodyFixedState(), lander.massKg, PREDICTION_HORIZON_SECONDS);
   predictionGeneration += 1;
+  if (plan && plan.count > 0 && !executingManeuver && plan.burns[0] && lander.time < plan.burns[0].startTime) {
+    plan.rebase(planState());
+    resolvePlanReferences();
+  }
 }
 
 function focusGeometry(vessel: Vec3): { geometry: FocusGeometry; position: Vec3; reference: CelestialBody } {
@@ -445,6 +606,12 @@ function frameLoop(nowMs: number): void {
     const throttleDelta = Number(keys.has('ShiftLeft') || keys.has('ShiftRight')) - Number(keys.has('ControlLeft') || keys.has('ControlRight'));
     if (throttleDelta) throttlePercent = Math.max(0, Math.min(100, throttlePercent + throttleDelta * wall * THROTTLE_RATE_PERCENT_PER_SECOND));
     const before = lander.time;
+    const nextBurn = plan?.burns[0];
+    if (warpToManeuver && nextBurn) {
+      const remaining = nextBurn.startTime - lander.time - 30;
+      if (remaining <= 0) { warpToManeuver = false; setTimeRate(1); }
+      else setTimeRate(TIME_RATES[TIME_RATES.length - 1]!);
+    }
     // Burning, waking on the ground or coming down lowers the rate at once, as KSP does. Falling out of
     // on-rails goes straight to 1×, so there is time to react.
     const limit = warpLimit();
@@ -454,15 +621,33 @@ function frameLoop(nowMs: number): void {
     }
     if (!paused) {
       const physicsStarted = performance.now();
-      if (timeRate > PHYSICS_MAX_RATE) lander.advanceOnRails(wall * timeRate);
-      else lander.advance(wall * timeRate, command());
+      let dt = wall * timeRate;
+      if (warpToManeuver && nextBurn) dt = Math.min(dt, Math.max(0, nextBurn.startTime - lander.time - 30));
+      if (nextBurn && !executingManeuver && nextBurn.startTime > lander.time) dt = Math.min(dt, nextBurn.startTime - lander.time);
+      if (executingManeuver && nextBurn) dt = Math.min(dt, Math.max(0, nextBurn.endTime - lander.time));
+      if (timeRate > PHYSICS_MAX_RATE) lander.advanceOnRails(dt);
+      else lander.advance(dt, command());
       timePhase('physics', performance.now() - physicsStarted);
+    }
+    if (plan && plan.count > 0 && !executingManeuver && plan.burns[0] && lander.time >= plan.burns[0].startTime - 1e-7) {
+      plan.rebase(planState());
+      const burn = plan.burns[0];
+      if (burn?.control) {
+        if (!planReady()) throw new Error('Maneuver ignition requires a separated upper stage in free flight');
+        executingManeuver = true; setTimeRate(1); throttlePercent = 0;
+      } else if (burn) { plan.completeFirst(planState()); selectedManeuver = Math.max(0, selectedManeuver - 1); }
+    }
+    if (executingManeuver && plan && lander.time >= plan.burns[0]!.endTime - 1e-7) {
+      executingManeuver = false;
+      throttlePercent = 0;
+      plan.completeFirst(planState()); selectedManeuver = Math.max(0, selectedManeuver - 1);
     }
     // A booster lost while attached leaves the upper stage flying on its own.
     if (stageNumber === 1 && lander.separated) stageNumber = 2;
     const t = lander.time;
     eph.statesAt(t, bodyPositions, bodyVelocities);
     updatePrediction();
+    if (plan && plan.count > 0) plan.extend(PLAN_STEPS_PER_FRAME);
 
     const upper = partInertial('upper');
     const { geometry, position: origin, reference } = focusGeometry(upper.position);
@@ -524,13 +709,14 @@ function frameLoop(nowMs: number): void {
       const q = quatMultiply(toRender, lander.partOrientation(which));
       mesh.quaternion.set(q.x, q.y, q.z, q.w);
     }
-    const firing = !paused && engineArmed && lander.fuelKg > 0 ? throttlePercent / 100 : 0;
+    const firing = !paused && engineArmed && lander.fuelKg > 0 ? executingManeuver ? 1 : throttlePercent / 100 : 0;
     RocketVisual.fire(visual.boosterEngine, stageNumber === 1, firing, t);
     RocketVisual.fire(visual.upperEngine, stageNumber === 2, firing, t);
 
     const navigation = dominance.dominant(bodyPositions, upper.position);
     map.update({ time: t, bodyPositions, bodyVelocities, origin, vessel: upper.position, vesselVelocity: upper.velocity,
       path: prediction ? { trajectory: prediction.trajectory, generation: predictionGeneration, reference: navigation } : null,
+      planPath: plan && plan.count > 0 ? { trajectory: plan.trajectory, generation: plan.generation, reference: navigation } : null,
       mapWeight: state.mapWeight, focus, camera, width: window.innerWidth, height: window.innerHeight });
 
     // The ball's horizon is the dominant body's; body-fixed vectors are turned into the ecliptic frame.
@@ -594,6 +780,7 @@ function updateText(upper: { position: Vec3; velocity: Vec3 }, navigation: numbe
   const osc = osculatingOrbit(r, v, body.gm);
 
   hudText.met.textContent = formatMissionTime(lander.time);
+  refreshPlanPanel();
   const limit = warpLimit();
   for (const button of warpButtons) {
     const blocked = Number(button.dataset.rate) > limit.rate;

@@ -29,6 +29,8 @@ export interface LanderSpec {
  */
 export interface LanderControl {
   throttle: number; up: number; prograde: number;
+  /** Planned orbital burn direction; only valid for a freely flying rocket. */
+  orbitalAttitude?: Extract<import('../orbitCore').AttitudeLaw, { kind: 'frenet' }>;
   /** Optional body-fixed thrust axis and collider orientation for manual steering. */
   direction?: Vec3;
   rotation?: Quaternion;
