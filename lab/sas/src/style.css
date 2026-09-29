@@ -11,6 +11,9 @@ html, body { margin: 0; height: 100%; background: #03040a; color: #cfd6e4; font:
 .panel output { text-align: right; color: #fff; }
 .panel pre { margin: 10px 0; color: #e6ecf6; font-size: 11px; }
 .panel .help { color: #8892a6; margin-top: 8px; }
+.tuning { margin: 6px 0; border-top: 1px solid #2a3040; padding-top: 4px; }
+.tuning summary { cursor: pointer; color: #9fb0d0; }
+.tuning pre { white-space: pre-wrap; font-size: 10px; color: #8892a6; }
 .sas-row { display: flex; align-items: center; gap: 10px; }
 button { background: #141a26; color: #cfd6e4; border: 1px solid #2f3850; border-radius: 4px; padding: 4px 8px; font: inherit; cursor: pointer; }
 button:hover { border-color: #5a6a8c; }

@@ -1,6 +1,6 @@
 import type RAPIER_NS from '@dimforge/rapier3d-compat';
 import { bodyOrientation, PropagationRun, STANDARD_GRAVITY, VesselPropagator, type Ephemeris, type ThrustControl, type Vec3 } from '../orbitCore';
-import { ANGULAR_DAMPING, ContactWorld, type Quaternion } from '../physics/ContactWorld';
+import { ContactWorld, type Quaternion } from '../physics/ContactWorld';
 import { addMat, parallelAxisPerKg, quatToMatrix, scaleMat, stepAttitude, transpose, matMul, type Mat3 } from './Attitude';
 import { PlanetFrame, type FrameState } from '../physics/PlanetFrame';
 import type { Terrain } from '../terrain/Surface';
@@ -546,7 +546,7 @@ export class PartJointRocket {
     const lead = this.parts[parts[0]!];
     const turn = this.turnFor(parts, control, lead.rotation, lead.angularVelocity, dt) ?? ZERO;
     const torque = { x: turn.x * STEERING_TORQUE, y: turn.y * STEERING_TORQUE, z: turn.z * STEERING_TORQUE };
-    const next = stepAttitude(lead.rotation, lead.angularVelocity, this.unitInertia(parts), torque, ANGULAR_DAMPING, dt);
+    const next = stepAttitude(lead.rotation, lead.angularVelocity, this.unitInertia(parts), torque, dt);
     for (const which of parts) {
       this.parts[which].rotation = next.rotation;
       this.parts[which].angularVelocity = next.angularVelocity;

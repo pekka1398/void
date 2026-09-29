@@ -64,15 +64,15 @@ export function quatMultiply(a: Quaternion, b: Quaternion): Quaternion {
  * One fixed step of Rapier's angular update, for a body that is not in a
  * Rapier world: torque and the gyroscopic term (explicit, from the current
  * angular momentum) change the angular velocity through the world-frame
- * inertia; the rotation advances by that velocity; then damping scales it by
- * 1 / (1 + dt * damping). Matches Rapier exactly for moderate spin; Rapier
+ * inertia; the rotation advances by that velocity. No damping: a spin keeps
+ * going until a torque stops it (lab/sas). Matches Rapier exactly for moderate spin; Rapier
  * treats the gyroscopic term implicitly, so at several rad/s off-axis the two
  * drift apart by a fraction of a degree over seconds.
  * rotation, angularVelocity: body-fixed planet frame (Rapier's frame near the ground).
  * inertiaLocal: kg m^2 in the part's local axes. torqueLocal: N m in local axes.
  */
 export function stepAttitude(rotation: Quaternion, angularVelocity: Vec3, inertiaLocal: Mat3, torqueLocal: Vec3,
-  damping: number, dt: number): { rotation: Quaternion; angularVelocity: Vec3 } {
+  dt: number): { rotation: Quaternion; angularVelocity: Vec3 } {
   const r = quatToMatrix(rotation);
   const inverseWorld = matMul(matMul(r, inverse(inertiaLocal)), transpose(r));
   const torque = matVec(r, torqueLocal);
@@ -80,13 +80,11 @@ export function stepAttitude(rotation: Quaternion, angularVelocity: Vec3, inerti
   const momentum = matVec(inertiaWorld, angularVelocity);
   const gyro = { x: angularVelocity.y * momentum.z - angularVelocity.z * momentum.y, y: angularVelocity.z * momentum.x - angularVelocity.x * momentum.z, z: angularVelocity.x * momentum.y - angularVelocity.y * momentum.x };
   const kick = matVec(inverseWorld, { x: torque.x - gyro.x, y: torque.y - gyro.y, z: torque.z - gyro.z });
-  const keep = 1 / (1 + dt * damping);
-  const u = { x: angularVelocity.x + kick.x * dt, y: angularVelocity.y + kick.y * dt, z: angularVelocity.z + kick.z * dt };
-  const w = { x: u.x * keep, y: u.y * keep, z: u.z * keep };
-  const speed = Math.hypot(u.x, u.y, u.z);
+  const w = { x: angularVelocity.x + kick.x * dt, y: angularVelocity.y + kick.y * dt, z: angularVelocity.z + kick.z * dt };
+  const speed = Math.hypot(w.x, w.y, w.z);
   if (speed === 0) return { rotation, angularVelocity: w };
   const half = (speed * dt) / 2, s = Math.sin(half) / speed;
-  const turned = quatMultiply({ x: u.x * s, y: u.y * s, z: u.z * s, w: Math.cos(half) }, rotation);
+  const turned = quatMultiply({ x: w.x * s, y: w.y * s, z: w.z * s, w: Math.cos(half) }, rotation);
   const length = Math.hypot(turned.x, turned.y, turned.z, turned.w);
   return { rotation: { x: turned.x / length, y: turned.y / length, z: turned.z / length, w: turned.w / length }, angularVelocity: w };
 }

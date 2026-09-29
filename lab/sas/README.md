@@ -1,6 +1,6 @@
 # SAS Lab
 
-KSP 式的姿態穩定（Stability Assist）。控制器在 `src/StabilityAssist.ts`，尚未接進主遊戲。
+KSP 式的姿態穩定（Stability Assist）。控制器在 `src/StabilityAssist.ts`，主遊戲以 `T` 開關（`src/sasCore.ts`）。
 
 ```sh
 cd lab/sas
@@ -13,7 +13,8 @@ npm run build
 ## 操作與驗收
 
 - `T` 或 SAS 按鈕開關；`W`/`S` 俯仰、`A`/`D` 偏航、`Q`/`E` 滾轉，與主遊戲相同；`K` 或按鈕施加隨機角速度。
-- 頁面沒有阻尼：SAS 關閉時一旦轉起來就不會停。這是之後主遊戲拿掉 `ANGULAR_DAMPING` 後的行為。
+- 沒有角阻尼（lab/landing 已拿掉 `ANGULAR_DAMPING`）：SAS 關閉時一旦轉起來就不會停，主遊戲相同。
+- 「Tuning」可即時調整 `SAS_TUNING`，下方顯示可直接貼回原始碼的數值；「Defaults」回到原始碼中的值。
 - 驗收：
   1. SAS 開、踢一下 → 偏離後回到灰色箭頭（鎖定姿態），不來回擺盪。
   2. 按住一個方向鍵 → 只有該軸轉；放開 → 先停下，再鎖住新的姿態（灰色箭頭移到新位置），不會被拉回原本方向。
@@ -37,7 +38,12 @@ npm run build
 
 `npm run check` 使用 lab/landing 的姿態積分器（無阻尼）與 demo 火箭真實的慣量，驗證：被踢後回到鎖定姿態（過衝、收斂時間、指令不超過上限）、按鍵軸直通且其他軸被阻尼、放開後鎖定新姿態、關閉時不干預、旋轉中開啟、錯誤輸入 panic，以及透過 `PartJointRocket` 在 contact 與 flight 模式中每步呼叫一次並保持姿態。
 
+## 主遊戲
+
+- `T` 或節流閥左邊的 SAS 燈號開關；綠色為開啟。重設（`R`）後為關閉。
+- SAS 關閉時照舊傳 `turn`；開啟時改傳每步的 `steering`。
+- 執行機動燃燒時由燃燒控制姿態，燈號變黃；燃燒結束後 SAS 重新停轉並鎖定當時的姿態。
+
 ## 待辦
 
-- 拿掉 `ANGULAR_DAMPING`（lab/landing，contact 與 flight 皆然），同時把 SAS 接進主遊戲（`T` 鍵、HUD 燈號）。兩者一起做，避免主遊戲出現停不下來的旋轉。
 - KSP 的其他 SAS 模式（順行／逆行／法向／徑向／目標／機動點）尚未實作。

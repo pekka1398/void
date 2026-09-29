@@ -52,6 +52,9 @@ canvas:active { cursor: grabbing; }
 
 .hud .flight { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; align-items: stretch; }
 .hud .flight .box { position: static; }
+.hud .sas { display: flex; align-items: center; justify-content: center; width: 44px; font-weight: 700; letter-spacing: 0.08em; color: #6c7488; }
+.hud .sas.on { background: #1f5a2e; border-color: #3dff6e; color: #eaffef; }
+.hud .sas.on.suspended { background: #3a3a1c; border-color: #d8c85a; color: #fff6c8; }
 .hud .throttle { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 52px; }
 .hud .throttle .bar { position: relative; width: 10px; height: 54px; background: #1a2030; border-radius: 3px; overflow: hidden; }
 .hud .throttle .bar i { position: absolute; bottom: 0; left: 0; right: 0; background: #6b8cc7; }

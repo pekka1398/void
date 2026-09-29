@@ -48,9 +48,6 @@ export interface Quaternion { x: number; y: number; z: number; w: number }
  */
 export type ExtraAcceleration = (body: RAPIER_NS.RigidBody, state: FrameState) => Vec3;
 
-/** Rapier angular damping of every non-ball body; flight attitude (vessel/Attitude.ts) uses the same. */
-export const ANGULAR_DAMPING = 0.8;
-
 export interface TileCollider { collider: RAPIER_NS.Collider; origin: Vec3 }
 
 /**
@@ -128,7 +125,6 @@ export class ContactWorld {
       // Stored velocity is the half-step velocity v - a dt/2.
       .setLinvel(state.velocity.x - (a.x * dt) / 2, state.velocity.y - (a.y * dt) / 2, state.velocity.z - (a.z * dt) / 2)
       .setRotation(rotation)
-      .setAngularDamping(spec.shape.kind === 'ball' ? 0 : ANGULAR_DAMPING)
       .setCcdEnabled(true));
     if (spec.lockRotations) body.lockRotations(true, false);
     const pieces = spec.shape.kind === 'compound'

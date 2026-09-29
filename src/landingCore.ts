@@ -4,7 +4,7 @@
  * than copied. Changes they need are made in lab/landing, whose checks must
  * keep passing.
  */
-export { PartJointRocket, type RocketPart } from '../lab/landing/src/vessel/PartJointRocket';
+export { PartJointRocket, STEERING_TORQUE, type RocketPart } from '../lab/landing/src/vessel/PartJointRocket';
 export type { LanderControl } from '../lab/landing/src/vessel/Lander';
 export { demoRocket, type DemoRocket } from '../lab/landing/src/vessel/DemoRocket';
 export { predictCoast, type CoastPrediction } from '../lab/landing/src/vessel/CoastPrediction';

@@ -56,7 +56,7 @@ class Craft {
   step(pilot: Vec3): Vec3 {
     const u = this.sas.command({ rotation: this.rotation, angularVelocity: this.angularVelocity, inertiaLocal: this.inertia }, pilot, DT);
     this.largestCommand = Math.max(this.largestCommand, Math.abs(u.x), Math.abs(u.y), Math.abs(u.z));
-    const next = stepAttitude(this.rotation, this.angularVelocity, this.inertia, { x: u.x * STEERING_TORQUE, y: u.y * STEERING_TORQUE, z: u.z * STEERING_TORQUE }, 0, DT);
+    const next = stepAttitude(this.rotation, this.angularVelocity, this.inertia, { x: u.x * STEERING_TORQUE, y: u.y * STEERING_TORQUE, z: u.z * STEERING_TORQUE }, DT);
     this.rotation = next.rotation;
     this.angularVelocity = next.angularVelocity;
     return u;
