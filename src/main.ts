@@ -2,13 +2,14 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three/webgpu';
 import { bodyOrientation, cross, dot, DominanceTree, FlightPlan, normalize, osculatingOrbit, PropagationRun, spinAxis, STANDARD_GRAVITY, sub, type CelestialBody, type ManeuverSpec, type Vec3 } from './orbitCore';
 import {
-  demoRocket, LabLog, PartJointRocket, PLANETS, planetEphemeris, predictCoast, RocketVisual, TerrainColliderLines, TerrainView,
+  demoRocket, LabLog, PartJointRocket, PLANETS, STEERING_TORQUE, planetEphemeris, predictCoast, RocketVisual, TerrainColliderLines, TerrainView,
   type CoastPrediction, type LanderControl, type RocketPart,
 } from './landingCore';
 import { MapLayer, OrbitCamera, toThree, viewState, type Focus, type FocusGeometry, type ViewState } from './viewCore';
 import { bodyFixedToRender, quatMultiply, vesselAxes } from './FlightFrame';
 import { NavballWidget } from './navballCore';
 import { gamePlanetById } from './GamePlanet';
+import { StabilityAssist } from './sasCore';
 import { FlightScenery } from './FlightScenery';
 import './style.css';
 
@@ -58,6 +59,9 @@ await RAPIER.init();
 const launch = () => PartJointRocket.landed(RAPIER, eph, bodyIndex, terrain, rocket.full, rocket.upper, rocket.booster, rocket.options, rocket.launchSite);
 let lander = launch();
 let stageNumber = 0;
+// lab/sas's stability assist on the steering torque; T toggles it. A maneuver burn steers itself, and SAS locks afresh after it.
+const sas = new StabilityAssist(STEERING_TORQUE);
+let sasSuspended = false;
 let engineArmed = false;
 let throttlePercent = 0;
 let paused = false;
@@ -97,6 +101,7 @@ hud.className = 'hud';
 hud.innerHTML = `<div class="box clock"><span id="met"></span><span class="warp">${TIME_RATES.map((r) => `<span class="click" data-rate="${r}">${r >= 1000 ? `${r / 1000}k` : r}×</span>`).join('')}</span><span class="paused" id="paused">PAUSED</span><span class="warp-note" id="warp-note"></span></div>
 <div class="box stages"><div class="caption" id="stage-head"></div>${PARTS.map((which) => `<div class="stage" id="stage-${which}"><span class="name"></span><span class="bar"><i></i></span><span class="fuel"></span><span class="dv"></span></div>`).join('')}<div class="hint" id="stage-hint"></div></div>
 <div class="flight">
+  <div class="box click sas" id="sas" title="T">SAS</div>
   <div class="box throttle"><span class="caption">THR</span><span class="bar"><i id="throttle-fill"></i></span><span id="throttle"></span></div>
   <div class="box speed"><span class="click caption" id="alt-mode"></span><b class="altitude" id="alt"></b><hr><span class="click caption" id="speed-mode"></span><b id="speed"></b><span class="sub" id="speed-reference"></span></div>
   <div class="box navball" id="navball"><span class="caption" id="heading"></span></div>
@@ -132,7 +137,7 @@ hud.innerHTML = `<div class="box clock"><span id="met"></span><span class="warp"
 </aside>
 <div class="box help" id="help" hidden><kbd>Space</kbd> ignite booster, then separate and ignite the upper stage<br>
 <kbd>Shift</kbd>/<kbd>Ctrl</kbd> throttle · <kbd>X</kbd> cut<br>
-<kbd>W</kbd>/<kbd>S</kbd> pitch · <kbd>A</kbd>/<kbd>D</kbd> yaw · <kbd>Q</kbd>/<kbd>E</kbd> roll<br>
+<kbd>W</kbd>/<kbd>S</kbd> pitch · <kbd>A</kbd>/<kbd>D</kbd> yaw · <kbd>Q</kbd>/<kbd>E</kbd> roll · <kbd>T</kbd> SAS<br>
 <kbd>,</kbd>/<kbd>.</kbd> time rate · <kbd>P</kbd> pause · <kbd>R</kbd> reset<br>
 Drag: orbit camera · wheel: zoom out into the map<br>
 <kbd>Tab</kbd> or a label: focus · <kbd>\`</kbd> dev panel · <kbd>F1</kbd> keys<br>
@@ -170,7 +175,7 @@ planReference.innerHTML = `<option value="auto">Auto</option>${bodies.map((body)
 const hudText = {
   met: element('#met'), paused: element('#paused'), altMode: element('#alt-mode'), alt: element('#alt'),
   stageHead: element('#stage-head'), stageHint: element('#stage-hint'),
-  throttleFill: element('#throttle-fill'), throttle: element('#throttle'),
+  throttleFill: element('#throttle-fill'), throttle: element('#throttle'), sas: element('#sas'),
   speedMode: element('#speed-mode'), speed: element('#speed'), speedReference: element('#speed-reference'),
   heading: element('#heading'), orbit: element('#orbit'), orbitHead: element('#orbit-head'), orbitText: element('#orbit-text'), debug: element('#debug'),
 };
@@ -214,6 +219,7 @@ const toggleDev = () => devPanel.classList.toggle('collapsed');
 const toggleHelp = () => { helpCard.hidden = !helpCard.hidden; };
 element('#dev-head').addEventListener('click', toggleDev);
 element('#help-button').addEventListener('click', toggleHelp);
+element('#sas').addEventListener('click', () => sas.toggle());
 element('#badge').textContent = planet.label;
 // lab/navball's ball, drawn every frame in the ecliptic frame; its markers follow SURFACE/ORBIT.
 const navball = new NavballWidget(150, Math.min(window.devicePixelRatio, 2));
@@ -331,6 +337,7 @@ function reset(): void {
   lander.free();
   lander = launch();
   stageNumber = 0; engineArmed = false; throttlePercent = 0; paused = false;
+  sas.setEnabled(false); sasSuspended = false;
   setTimeRate(1);
   prediction = null; predictionAt = -Infinity; predictionGeneration += 1;
   plan = null; selectedManeuver = 0; planMessage = ''; executingManeuver = false; warpToManeuver = false;
@@ -348,6 +355,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') stage();
   else if (e.code === 'KeyX') throttlePercent = 0;
   else if (e.code === 'KeyP') paused = !paused;
+  else if (e.code === 'KeyT') sas.toggle();
   else if (e.code === 'KeyR') reset();
   else if (e.code === 'Comma') stepTimeRate(-1);
   else if (e.code === 'Period') stepTimeRate(1);
@@ -364,6 +372,7 @@ window.addEventListener('blur', () => keys.clear());
 const axis = (positive: string, negative: string) => Number(keys.has(positive)) - Number(keys.has(negative));
 function command(): LanderControl {
   if (executingManeuver) {
+    sasSuspended = true;
     const burn = requirePlan().burns[0];
     if (!burn || !burn.control || burn.control.attitude.kind !== 'frenet') throw new Error('active maneuver has no orbital burn');
     const attitude = burn.control.attitude;
@@ -383,8 +392,11 @@ function command(): LanderControl {
     return { throttle: 1, up: 0, prograde: 0, orbitalAttitude: attitude,
       rotation: { x: q.x / qLength, y: q.y / qLength, z: q.z / qLength, w: q.w / qLength } };
   }
-  return { throttle: engineArmed ? throttlePercent / 100 : 0, up: 1, prograde: 0,
-    turn: { x: axis('KeyS', 'KeyW'), y: axis('KeyE', 'KeyQ'), z: axis('KeyD', 'KeyA') } };
+  if (sasSuspended) { sasSuspended = false; if (sas.enabled) sas.setEnabled(true); }
+  const pilot = { x: axis('KeyS', 'KeyW'), y: axis('KeyE', 'KeyQ'), z: axis('KeyD', 'KeyA') };
+  const throttle = engineArmed ? throttlePercent / 100 : 0;
+  if (!sas.enabled) return { throttle, up: 1, prograde: 0, turn: pilot };
+  return { throttle, up: 1, prograde: 0, steering: (sample, dt) => sas.command(sample, pilot, dt) };
 }
 
 const canvas = renderer.domElement;
@@ -816,6 +828,9 @@ function updateText(upper: { position: Vec3; velocity: Vec3 }, navigation: numbe
   hudText.throttleFill.style.height = `${throttlePercent.toFixed(1)}%`;
   hudText.throttleFill.parentElement!.classList.toggle('firing', engine === 'firing');
   hudText.throttle.textContent = `${throttlePercent.toFixed(0)}%\n${engine}`;
+  hudText.sas.classList.toggle('on', sas.enabled);
+  hudText.sas.classList.toggle('suspended', sas.enabled && executingManeuver);
+  hudText.sas.title = sas.enabled ? (executingManeuver ? 'SAS: the maneuver steers (T)' : `SAS: ${sas.phase} (T)`) : 'SAS off (T)';
 
   const speed = speedMode === 'surface' ? ground : v;
   hudText.speedMode.textContent = speedMode === 'surface' ? 'SURFACE' : 'ORBIT';

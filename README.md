@@ -16,6 +16,8 @@ npm run build
 
 - `src/`：主遊戲入口、整合接線、座標轉換、HUD 和遊戲流程。
 - `lab/orbit`、`lab/lod`、`lab/landing`、`lab/view`、`lab/navball`、`lab/scenery`：各功能的原始碼與獨立驗證場景。主遊戲直接引用所需功能。
+- `lab/sas`：姿態穩定（SAS），主遊戲以 `T` 開關。
+- `lab/assembly`：尚未接進主遊戲的功能 lab。
 - `lab/flight`：整合驗證入口，啟動同一份 `src/main.ts`，保留既有啟動與檢查指令。
 
 功能問題在所屬 lab 修正，整合問題在 `src/` 修正；不要複製功能來維護第二份實作。功能介面或假設改變時，同步更新使用者並驗證受影響的 lab 與主遊戲。瀏覽器驗收由使用者操作。

@@ -7,7 +7,7 @@ import { PartJointRocket } from './src/vessel/PartJointRocket';
 import { matMul, matVec, quatToMatrix, stepAttitude, transpose } from './src/vessel/Attitude';
 import { EncounterPhysicsGate } from './src/vessel/EncounterPhysics';
 import { predictCoast } from './src/vessel/CoastPrediction';
-import { ANGULAR_DAMPING, ContactWorld, type ContactWorldOptions } from './src/physics/ContactWorld';
+import { ContactWorld, type ContactWorldOptions } from './src/physics/ContactWorld';
 import { PlanetFrame, type FrameState } from './src/physics/PlanetFrame';
 import type { Terrain } from './src/terrain/Surface';
 import { aurelia, PLANETS, pebble, planetEphemeris } from './src/planet/Planets';
@@ -611,7 +611,7 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
       const worldTorque = matVec(quatToMatrix(body.rotation()), torque);
       body.applyTorqueImpulse({ x: worldTorque.x * dt, y: worldTorque.y * dt, z: worldTorque.z * dt }, true);
       world.step();
-      flight = stepAttitude(flight.rotation, flight.angularVelocity, inertia, torque, ANGULAR_DAMPING, dt);
+      flight = stepAttitude(flight.rotation, flight.angularVelocity, inertia, torque, dt);
     }
     const w = body.angvel();
     const angle = angleBetween(body.rotation(), flight.rotation);
@@ -637,14 +637,13 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
       const after = craft.partAngularVelocity('upper');
       exitJump = norm({ x: after.x - before.x, y: after.y - before.y, z: after.z - before.z }) / Math.max(norm(before), 1e-9);
     }
-    // In flight: one second of pitch turns the stack; releasing lets Rapier's damping take the spin down.
+    // In flight: one second of pitch turns the stack; released, nothing damps it and the spin keeps going.
     const q1 = craft.orientation();
     craft.advance(1, { ...COAST, turn: { x: 1, y: 0, z: 0 } });
     const turned = angleBetween(q1, craft.orientation());
     const spinning = norm(craft.partAngularVelocity('upper'));
     craft.advance(2, COAST);
     const decayed = norm(craft.partAngularVelocity('upper'));
-    const expectedDecay = (1 / (1 + dt * ANGULAR_DAMPING)) ** Math.round(2 / dt);
     const flying = craft.mode === 'flight';
     // Coast back down and step across the band entry.
     let returnJump = Infinity;
@@ -660,8 +659,8 @@ const COAST: LanderControl = { throttle: 0, up: 1, prograde: 0 };
         returnJump = norm({ x: w1.x - w0.x, y: w1.y - w0.y, z: w1.z - w0.z }) / Math.max(norm(w0), 1e-9);
       }
     }
-    check('steering in orbital flight', flying && turned > 5 * Math.PI / 180 && Math.abs(decayed / spinning - expectedDecay) < 0.02,
-      `1 s of pitch above the band turned the stack ${(turned * 180 / Math.PI).toFixed(1)}°; released for 2 s, spin ${fmt(spinning)} -> ${fmt(decayed)} rad/s (x${(decayed / spinning).toFixed(3)}, Rapier damping gives x${expectedDecay.toFixed(3)})`);
+    check('steering in orbital flight', flying && turned > 5 * Math.PI / 180 && Math.abs(decayed / spinning - 1) < 1e-6,
+      `1 s of pitch above the band turned the stack ${(turned * 180 / Math.PI).toFixed(1)}°; released for 2 s, spin ${fmt(spinning)} -> ${fmt(decayed)} rad/s (x${(decayed / spinning).toFixed(9)}, undamped)`);
     check('angular velocity carried across physics hand-offs', exitJump < 0.05 && returnJump < 0.05 && norm(before) > 0.01 && spinAtEntry > 0.01,
       `contact -> flight at ${fmt(norm(before))} rad/s: spin changed ${(exitJump * 100).toFixed(2)}% over the switching step; flight -> contact at ${fmt(spinAtEntry)} rad/s: ${(returnJump * 100).toFixed(2)}%`);
     craft.free();
